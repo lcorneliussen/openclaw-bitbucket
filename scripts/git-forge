@@ -1,0 +1,37 @@
+#!/bin/sh
+# git-forge — say which forge a checkout's remote lives on.
+#
+#   git-forge [remote]        default remote: origin
+#
+# Prints one line: "<forge> <owner> <repo>", where <forge> is bitbucket,
+# github, or unknown. For Bitbucket, <owner> is the workspace slug.
+# Reads the URL git would actually use, so insteadOf rewrites are honoured.
+# Exits 1 when the directory is not a git checkout or the remote is missing.
+set -eu
+
+remote="${1:-origin}"
+url="$(git remote get-url "$remote" 2>/dev/null)" || {
+  echo "git-forge: no remote '$remote' here" >&2
+  exit 1
+}
+
+# scp-like (git@host:owner/repo.git), ssh://, https:// — reduce to host/path.
+rest="${url#*://}"
+[ "$rest" = "$url" ] && rest="$(printf '%s' "$url" | sed 's|^\([^/:]*\):|\1/|')"
+rest="${rest#*@}"
+host="${rest%%/*}"
+host="${host%%:*}"
+path="${rest#*/}"
+path="${path%.git}"
+path="${path%/}"
+
+case "$host" in
+  bitbucket.org) forge=bitbucket ;;
+  github.com) forge=github ;;
+  *) forge=unknown ;;
+esac
+
+owner="${path%%/*}"
+repo="${path#*/}"
+repo="${repo%%/*}"
+echo "$forge $owner $repo"
