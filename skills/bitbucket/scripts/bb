@@ -1,0 +1,23 @@
+#!/bin/sh
+# bb — `twg bb` with the login this session was given.
+#
+#   bb prs query            same arguments as `twg bb`
+#
+# A gateway with personal Bitbucket logins names the session owner's login
+# file in BITBUCKET_LOGIN_FILE. The token goes to `twg` only, through its
+# environment; it is never printed. Without that variable this is plain
+# `twg bb`, and `twg` uses whatever login it has.
+set -eu
+
+if [ "${BITBUCKET_LOGIN_FILE+set}" = set ]; then
+  if [ -z "$BITBUCKET_LOGIN_FILE" ] || [ ! -r "$BITBUCKET_LOGIN_FILE" ]; then
+    echo "bb: the person this session belongs to has not connected Bitbucket." >&2
+    echo "bb: they open ${BITBUCKET_CONNECT_PATH:-the Bitbucket page} on the gateway and connect." >&2
+    exit 3
+  fi
+  TWG_BBC_USER="$(sed -n 's/^user=//p' "$BITBUCKET_LOGIN_FILE")"
+  TWG_BBC_TOKEN="$(sed -n 's/^token=//p' "$BITBUCKET_LOGIN_FILE")"
+  export TWG_BBC_USER TWG_BBC_TOKEN
+fi
+
+exec twg bb "$@"

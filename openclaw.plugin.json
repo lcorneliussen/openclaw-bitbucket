@@ -1,0 +1,27 @@
+{
+  "id": "bitbucket",
+  "name": "Bitbucket",
+  "description": "Bitbucket Cloud skill and personal Bitbucket logins: each signed-in person connects their own account, and commands in their sessions use it.",
+  "activation": {
+    "onStartup": true
+  },
+  "skills": [
+    "./skills"
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "gitIdentity": {
+        "type": "boolean",
+        "default": true,
+        "description": "Set the Git author and committer of a session's commands to the session owner's Bitbucket account."
+      },
+      "controlUiTab": {
+        "type": "boolean",
+        "default": true,
+        "description": "Show a Bitbucket tab in the Control UI sidebar."
+      }
+    }
+  }
+}

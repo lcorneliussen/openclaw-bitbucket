@@ -35,25 +35,37 @@ Outside a checkout, pass `--workspace <slug> --repo <slug>`.
 ## Auth
 
 `twg bb` needs a Bitbucket API token (scopes: repositories and pull requests,
-read and write; pipelines read for CI). It takes it from the environment:
+read and write; pipelines read for CI). `git push` over HTTPS uses the same
+token as the password, with the user name `x-bitbucket-api-token-auth`.
+
+Check the environment first:
 
 ```bash
-TWG_BBC_USER=<atlassian account e-mail>
-TWG_BBC_TOKEN=<api token>
+echo "${BITBUCKET_LOGIN_FILE-unset}"
 ```
 
-or from `twg setup bitbucket`, which asks for it interactively.
+| Result | Meaning |
+|---|---|
+| a path | The gateway gave this session its owner's login. Run `{baseDir}/scripts/bb …` wherever this page says `twg bb …`. `git` commits as that person. |
+| empty | The gateway has personal logins, and the person this session belongs to has not connected one. Do not look for another login. Tell them to open `$BITBUCKET_CONNECT_PATH` on the gateway's address in their browser, connect, and ask again. |
+| `unset` | No personal logins here. `twg` takes the token from `TWG_BBC_USER` and `TWG_BBC_TOKEN`, or from `twg setup bitbucket`. |
 
-`git push` over HTTPS uses the same token as the password, with the user name
-`x-bitbucket-api-token-auth`.
+With a login file, `git push` and `git fetch` normally just work. If git
+reports that authentication failed, the machine has no credential helper
+configured for it; name the helper for that one command:
 
+```bash
+git -c credential.https://bitbucket.org.helper= \
+    -c credential.https://bitbucket.org.helper="{baseDir}/scripts/git-credential-bitbucket" \
+    push -u origin <branch>
+```
+
+- The login belongs to one person. Never read the file, copy it, or point a
+  command at a different one, and never set `BITBUCKET_LOGIN_FILE` yourself.
+- Never ask for a token in chat, echo one, or pass one as a command argument.
 - Check before you write: `twg bb repo get -o json` fails with
   `AUTH_INVALID` when no usable token is present.
-- Never ask for a token in chat, echo one, or pass one as a command argument.
-  If the deployment provides a wrapper that supplies a person's login, run
-  every `git` and `twg` command through it.
-- Pull requests and comments appear under the token's account. On a shared
-  agent, use the login of the person the work is for.
+- Pull requests and comments appear under the token's account.
 
 ## Pull requests
 
