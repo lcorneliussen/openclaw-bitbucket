@@ -19,12 +19,16 @@ Bitbucket Cloud for [OpenClaw](https://docs.openclaw.ai), in two parts:
 | `skills/bitbucket/scripts/git-forge` | Prints `<forge> <owner> <repo>` for a checkout's remote |
 | `skills/bitbucket/scripts/bb` | `twg bb` with the login the session was given |
 | `skills/bitbucket/scripts/git-credential-bitbucket` | Git credential helper for that login |
+| `skills/bitbucket/scripts/publish-intent.mjs` | Carries out a publish intent: pushes the branch, opens or finds the pull request |
 
 ## Requirements
 
 - OpenClaw 2026.10.2 or later
 - `git`, and [`twg`](https://developer.atlassian.com/cloud/twg-cli/getting-started/installation/)
-  (the Atlassian CLI) on the gateway's `PATH`
+  (the Atlassian CLI) on the gateway's `PATH`.
+  `twg` ships for Linux x64 only; on another architecture the skill's
+  `twg bb` commands are unavailable, and `publish-intent.mjs` still pushes
+  and opens pull requests with a session's login
 - for personal logins: a gateway sign-in that identifies each person, such as
   trusted-proxy auth. With a shared token the gateway cannot tell people apart.
 

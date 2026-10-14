@@ -107,6 +107,46 @@ Merging and declining are hard to undo. Do them only when asked, and after
 `mergeability` shows nothing blocking. Run `<command> --help` for options this
 page does not list.
 
+## Publish intents
+
+A tool that cannot publish from where it runs may hand you the publication as
+JSON instead: a plan with `intents`, or one intent. `wtc publish` does this
+inside an OpenClaw agent's shell:
+
+```json
+{ "host": "openclaw", "version": 1, "action": "publish", "actor": "repo-session",
+  "repo": "docs", "forge": "bitbucket",
+  "args": { "owner": "example-ws", "repo": "docs",
+            "source": "openclaw/72-add-thing", "dest": "main",
+            "title": "Add thing", "draft": true } }
+```
+
+An intent with `"forge": "bitbucket"` and no `tool` is this skill's to carry
+out. One with a `tool` (`github_publish`) is not: call that tool.
+
+Run it in the session that owns the repository (`actor` is `repo-session`),
+with the work committed. Pipe the plan in, or name a file that holds it:
+
+```bash
+wtc publish --title "<what changed>" | {baseDir}/scripts/publish-intent.mjs
+{baseDir}/scripts/publish-intent.mjs --dry-run plan.json     # check only
+```
+
+The script pushes `source` and opens the pull request into `dest`, as a draft
+when the intent says so, or finds the one already open for that branch. It
+uses this session's login as described under Auth, and where `twg` is not
+installed it asks Bitbucket directly. It prints
+`{status, url, number, branch, dest, created}`: answer with the URL.
+
+It refuses instead of repairing, and so should you:
+
+- **another checkout or branch**: say so and stop; do not switch branches to
+  make the intent fit.
+- **uncommitted work**: commit what belongs to the change, then run it again.
+- **push rejected**: the remote branch has commits this one lacks. Merge
+  them and publish again. Never rebase or force-push a published branch:
+  other tools that publish from the same checkout refuse rewritten history.
+
 ## Review comments
 
 ```bash
