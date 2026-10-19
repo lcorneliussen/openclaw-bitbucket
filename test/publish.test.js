@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -38,14 +38,18 @@ async function fixture({ connected = true } = {}) {
     await writeLogin(stateDir, { profile: "bob", user: "bob@example.com", name: "Bob", token: "bob-token", stored: "2026-01-01T00:00:00.000Z" });
   }
   const calls = [];
+  const open = [];
   const fetchImpl = async (url, init) => {
     calls.push({ url, method: init.method, auth: init.headers.authorization, body: init.body && JSON.parse(init.body) });
-    const value = init.method === "GET"
-      ? { values: [] }
+    const value = /\/repositories\/[^/]+\/[^/?]+$/.test(url)
+      ? { mainbranch: { name: "main" } }
+      : init.method === "GET"
+      ? { values: open }
       : { id: 7, links: { html: { href: "https://bitbucket.org/example-ws/docs/pull-requests/7" } } };
     return new Response(JSON.stringify(value), { status: init.method === "GET" ? 200 : 201 });
   };
   let profileId = "ada";
+  const clock = { t: Date.now() };
   const publisher = createPublisher({
     stateDir,
     getSessionEntry: async ({ sessionKey }) => (sessionKey === "repo-session" ? { worktree: { branch: "openclaw/add-thing" }, workspaceDir: work } : undefined),
@@ -53,8 +57,9 @@ async function fixture({ connected = true } = {}) {
     fetchImpl,
     gitEnv,
     apiUrl: "https://api.test/2.0",
+    now: () => clock.t,
   });
-  return { work, bare, publisher, calls, as: (id) => { profileId = id; } };
+  return { work, bare, publisher, calls, open, now: clock, as: (id) => { profileId = id; } };
 }
 
 const ask = (p, payload = {}) => p.publish({ sessionKey: "repo-session", agentId: "main", payload });
@@ -80,7 +85,7 @@ test("asking pushes nothing; confirming pushes the branch and opens a draft pull
   assert.equal(c.title, "Add the thing");
   assert.equal(c.head, git(f.work, "rev-parse", "HEAD"));
   assert.equal(git(f.bare, "branch", "--list", "openclaw/add-thing"), "", "nothing is pushed before confirming");
-  assert.equal(f.calls.length, 0);
+  assert.equal(f.calls.filter((c) => /pullrequests/.test(c.url)).length, 0, "no pull request is asked for before confirming");
 
   const done = await confirm(f.publisher, out);
   assert.equal(done.ok, true, done.error);
@@ -88,8 +93,9 @@ test("asking pushes nothing; confirming pushes the branch and opens a draft pull
   assert.equal(done.result.url, "https://bitbucket.org/example-ws/docs/pull-requests/7");
   assert.equal(done.result.created, true);
   assert.equal(git(f.bare, "rev-parse", "openclaw/add-thing"), c.head);
-  const [query, create] = f.calls;
+  const [query, create] = f.calls.filter((c) => /pullrequests/.test(c.url));
   assert.match(query.url, /^https:\/\/api\.test\/2\.0\/repositories\/example-ws\/docs\/pullrequests\?q=/);
+  assert.match(decodeURIComponent(query.url), /source\.repository\.full_name="example-ws\/docs"/, "a fork's pull request is not reused");
   assert.equal(create.method, "POST");
   assert.deepEqual(create.body, { title: "Add the thing", draft: true, source: { branch: { name: "openclaw/add-thing" } }, destination: { branch: { name: "main" } } });
   assert.equal(create.auth, "Basic " + Buffer.from("ada@example.com:secret-token").toString("base64"));
@@ -149,4 +155,46 @@ test("a session without a worktree, or with a GitHub origin, is refused", async 
   assert.match(res.error, /no managed worktree/);
   git(f.work, "remote", "set-url", "origin", "https://github.com/example/docs.git");
   assert.match((await ask(f.publisher)).error, /not a Bitbucket repository/);
+});
+
+test("a request expires after ten minutes, and nothing is pushed then", async () => {
+  const f = await fixture();
+  const out = await ask(f.publisher);
+  f.now.t += 10 * 60_000 + 1;
+  assert.match((await confirm(f.publisher, out)).error, /expired/);
+  assert.equal(git(f.bare, "branch", "--list", "openclaw/add-thing"), "");
+});
+
+test("an open pull request is found, not opened again, and draft: false opens a ready one", async () => {
+  const f = await fixture();
+  f.open.push({ id: 5, links: { html: { href: "https://bitbucket.org/example-ws/docs/pull-requests/5" } } });
+  const done = await confirm(f.publisher, await ask(f.publisher));
+  assert.equal(done.result.created, false);
+  assert.equal(done.result.number, 5);
+  assert.equal(f.calls.some((c) => c.method === "POST"), false);
+  f.open.length = 0;
+  await writeFile(path.join(f.work, "e.txt"), "e\n");
+  git(f.work, "add", "e.txt");
+  git(f.work, "commit", "-qm", "Ready");
+  await confirm(f.publisher, await ask(f.publisher, { draft: false }));
+  assert.equal(f.calls.find((c) => c.method === "POST").body.draft, false);
+});
+
+test("the worktree's git config and hooks do not take part in the push", async () => {
+  const f = await fixture();
+  const marker = path.join(f.work, "..", "hook-ran");
+  // A pre-push hook and a push URL elsewhere, as an agent could set them.
+  await writeFile(path.join(f.work, ".git", "hooks", "pre-push"), `#!/bin/sh\ntouch ${marker}\nexit 1\n`, { mode: 0o755 });
+  git(f.work, "config", "remote.origin.pushurl", path.join(f.work, "..", "elsewhere.git"));
+  const done = await confirm(f.publisher, await ask(f.publisher));
+  assert.equal(done.ok, true, done.error);
+  assert.equal(git(f.bare, "rev-parse", "openclaw/add-thing"), git(f.work, "rev-parse", "HEAD"));
+  await assert.rejects(stat(marker), "the worktree's pre-push hook did not run");
+});
+
+test("origin repointed after asking is refused", async () => {
+  const f = await fixture();
+  const out = await ask(f.publisher);
+  git(f.work, "remote", "set-url", "origin", "https://bitbucket.org/example-ws/public-copy.git");
+  assert.match((await confirm(f.publisher, out)).error, /moved on/);
 });

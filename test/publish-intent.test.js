@@ -179,3 +179,11 @@ test("without twg it asks Bitbucket directly, with the session owner's login", a
     server.close();
   }
 });
+
+test("where the gateway publishes itself, the agent is told to leave it to the person", async () => {
+  const f = fixture();
+  const r = await publish(f, plan(), [], { BITBUCKET_PUBLISH: "gateway" });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /publishes Bitbucket repositories itself/);
+  assert.throws(() => f.remoteHead(), "nothing was pushed");
+});

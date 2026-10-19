@@ -133,8 +133,11 @@ The login is the signed-in person's own, never the session owner's or the
 gateway's. Only the person who asked can confirm, within ten minutes, once,
 and only while the worktree is still on the confirmed commit. Confirming
 pushes that commit to the worktree's branch without forcing, then finds the
-open pull request into the destination (the repository's default branch
-unless named) or opens one, a draft unless `draft` is `false`. Nothing is
+open pull request into the destination (the repository's main branch unless
+named) or opens one, a draft unless `draft` is `false`. The token never meets
+the worktree's git config or hooks, which the agent can change: the commit is
+fetched into a repository of the gateway's own and pushed from there to the
+confirmed repository's https URL. Nothing is
 committed: uncommitted files stay behind, and the confirmation counts them.
 When origin has commits the branch lacks, the push fails and says to catch up.
 
