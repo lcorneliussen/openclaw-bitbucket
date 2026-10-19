@@ -125,7 +125,7 @@ actions with `plugins.sessionAction` (`pluginId: "bitbucket"`):
 
 | Action | Payload | Answer |
 |---|---|---|
-| `publish-options` | `{dest?}` | your account, or `null`, and the worktree's repository, branch, head, destination and uncommitted files |
+| `publish-options` | `{dest?}` | your account, or `null`, and the worktree's repository, branch, head and destination |
 | `publish` | `{dest?, title?, draft?}` | `needs_confirmation` with a `requestId` and a `confirmation` naming the account, branch, commit, destination and a `requestDigest`; `not_connected` without a login |
 | `publish-confirm` | `{requestId, requestDigest}` | `published` with the pull request's `url`, `number` and whether it was `created` |
 
@@ -138,7 +138,9 @@ named) or opens one, a draft unless `draft` is `false`. The token never meets
 the worktree's git config or hooks, which the agent can change: the commit is
 fetched into a repository of the gateway's own and pushed from there to the
 confirmed repository's https URL. Nothing is
-committed: uncommitted files stay behind, and the confirmation counts them.
+committed: uncommitted files stay behind. Nothing reads file contents in
+the worktree either, so no filter driver its config names runs on the
+gateway.
 When origin has commits the branch lacks, the push fails and says to catch up.
 
 Set `execLogin` to `false` so that this is the only way to push. Commands in

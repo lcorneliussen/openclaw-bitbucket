@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -141,12 +141,12 @@ test("a branch origin has moved is not forced: the person is told to catch up", 
   assert.match(res.error, /catch up/);
 });
 
-test("uncommitted files stay behind and the confirmation counts them", async () => {
+test("a title can be given", async () => {
   const f = await fixture();
   await writeFile(path.join(f.work, "notes.txt"), "draft\n");
   const out = await ask(f.publisher, { title: "Custom title" });
-  assert.equal(out.result.confirmation.uncommitted, 1);
   assert.equal(out.result.confirmation.title, "Custom title");
+  assert.equal("uncommitted" in out.result.confirmation, false);
 });
 
 test("a session without a worktree, or with a GitHub origin, is refused", async () => {
@@ -197,4 +197,30 @@ test("origin repointed after asking is refused", async () => {
   const out = await ask(f.publisher);
   git(f.work, "remote", "set-url", "origin", "https://bitbucket.org/example-ws/public-copy.git");
   assert.match((await confirm(f.publisher, out)).error, /moved on/);
+});
+
+test("reading the worktree runs none of its filter drivers", async () => {
+  const f = await fixture();
+  const marker = path.join(f.work, "..", "filter-ran");
+  git(f.work, "config", "filter.evil.clean", `touch ${marker}; cat`);
+  await writeFile(path.join(f.work, ".gitattributes"), "*.txt filter=evil\n");
+  git(f.work, "add", ".gitattributes");
+  git(f.work, "commit", "-qm", "Attributes");
+  // Make a tracked file stat-dirty, which git status would run the filter for.
+  await writeFile(path.join(f.work, "a.txt"), "a\n");
+  await rm(marker, { force: true });
+  const out = await ask(f.publisher);
+  assert.equal(out.ok, true, out.error);
+  await assert.rejects(stat(marker), "the worktree's clean filter did not run");
+  assert.equal((await confirm(f.publisher, out)).ok, true);
+  await assert.rejects(stat(marker));
+});
+
+test("a push Bitbucket refuses for another reason says why, not to catch up", async () => {
+  const f = await fixture();
+  await writeFile(path.join(f.bare, "hooks", "pre-receive"), "#!/bin/sh\necho 'branch is protected' >&2\nexit 1\n", { mode: 0o755 });
+  const res = await confirm(f.publisher, await ask(f.publisher));
+  assert.equal(res.ok, false);
+  assert.match(res.error, /git push failed: .*branch is protected/);
+  assert.doesNotMatch(res.error, /catch up/);
 });
