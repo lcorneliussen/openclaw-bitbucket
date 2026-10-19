@@ -97,6 +97,12 @@ test("exec gets the owner's login, and an empty answer when there is none", asyn
     assert.equal(env.BITBUCKET_LOGIN_FILE, "");
     assert.equal(env.GIT_AUTHOR_EMAIL, undefined);
   }
+
+  // With execLogin off, commands commit as the owner but get no login.
+  const gated = await index.execEnv({ ...deps, execLogin: false }, { sessionKey: "mine", host: "gateway" }, {});
+  assert.equal(gated.BITBUCKET_LOGIN_FILE, "");
+  assert.equal(gated.BITBUCKET_PUBLISH, "gateway");
+  assert.equal(gated.GIT_AUTHOR_EMAIL, "ada@example.com");
 });
 
 function response() {
@@ -209,4 +215,25 @@ test("bb refuses when the owner has not connected, and never prints the token", 
     return true;
   });
   assert.ok(!(await readFile(bb, "utf8")).includes("echo \"$TWG_BBC_TOKEN"));
+});
+
+test("the publish actions are registered, and need a signed-in person", async () => {
+  const actions = new Map();
+  const api = {
+    pluginConfig: {},
+    logger: {},
+    runtime: { state: { resolveStateDir: () => "/nonexistent" }, agent: { session: { getSessionEntry: async () => undefined } } },
+    on() {},
+    registerHttpRoute() {},
+    session: { controls: { registerSessionAction: (a) => actions.set(a.id, a), registerControlUiDescriptor() {} } },
+  };
+  index.default.register(api);
+  assert.deepEqual(["publish-options", "publish", "publish-confirm"].map((id) => actions.get(id)?.requiredScopes?.[0]), ["operator.read", "operator.write", "operator.write"]);
+  assert.deepEqual(actions.get("publish-confirm").schema.required, ["requestId", "requestDigest"]);
+  // The stubbed SDK has no request scope, so there is no person to publish as.
+  for (const id of ["publish-options", "publish", "publish-confirm"]) {
+    const res = await actions.get(id).handler({ sessionKey: "s", agentId: "main", payload: { requestId: "r", requestDigest: "d" } });
+    assert.equal(res.ok, false);
+    assert.match(res.error, /sign in as a person/);
+  }
 });
