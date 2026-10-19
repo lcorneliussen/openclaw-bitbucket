@@ -224,3 +224,22 @@ test("a push Bitbucket refuses for another reason says why, not to catch up", as
   assert.match(res.error, /git push failed: .*branch is protected/);
   assert.doesNotMatch(res.error, /catch up/);
 });
+
+test("reading the worktree runs no signature program from its config", async () => {
+  const f = await fixture();
+  const marker = path.join(f.work, "..", "gpg-ran");
+  const program = path.join(f.work, "..", "fake-gpg");
+  await writeFile(program, `#!/bin/sh\ntouch ${marker}\nexit 1\n`, { mode: 0o755 });
+  git(f.work, "config", "log.showSignature", "true");
+  git(f.work, "config", "gpg.program", program);
+  // A HEAD with a (forged) signature header, which git log would verify.
+  const tree = git(f.work, "rev-parse", "HEAD^{tree}");
+  const parent = git(f.work, "rev-parse", "HEAD");
+  const signed = `tree ${tree}\nparent ${parent}\nauthor Ada <ada@example.com> 1700000000 +0000\ncommitter Ada <ada@example.com> 1700000000 +0000\ngpgsig -----BEGIN PGP SIGNATURE-----\n \n -----END PGP SIGNATURE-----\n\nSigned subject\n`;
+  const sha = execFileSync("git", ["-C", f.work, "hash-object", "-t", "commit", "-w", "--stdin"], { input: signed, encoding: "utf8" }).trim();
+  git(f.work, "reset", "-q", sha);
+  const out = await ask(f.publisher);
+  assert.equal(out.ok, true, out.error);
+  assert.equal(out.result.confirmation.title, "Signed subject");
+  await assert.rejects(stat(marker), "the worktree's gpg.program did not run");
+});
