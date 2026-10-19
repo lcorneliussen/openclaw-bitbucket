@@ -41,8 +41,14 @@ token as the password, with the user name `x-bitbucket-api-token-auth`.
 Check the environment first:
 
 ```bash
-echo "${BITBUCKET_LOGIN_FILE-unset}"
+echo "${BITBUCKET_LOGIN_FILE-unset} ${BITBUCKET_PUBLISH-}"
 ```
+
+When the second word is `gateway`, this gateway keeps Bitbucket logins out of
+agents' commands: you have no login to push, comment or open pull requests
+with, and must not look for one. Commit the work; the person pushes it and
+opens the pull request from the Control UI, where the gateway asks them to
+confirm. Tell them what is ready to publish.
 
 | Result | Meaning |
 |---|---|

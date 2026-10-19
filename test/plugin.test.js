@@ -97,6 +97,12 @@ test("exec gets the owner's login, and an empty answer when there is none", asyn
     assert.equal(env.BITBUCKET_LOGIN_FILE, "");
     assert.equal(env.GIT_AUTHOR_EMAIL, undefined);
   }
+
+  // With execLogin off, commands commit as the owner but get no login.
+  const gated = await index.execEnv({ ...deps, execLogin: false }, { sessionKey: "mine", host: "gateway" }, {});
+  assert.equal(gated.BITBUCKET_LOGIN_FILE, "");
+  assert.equal(gated.BITBUCKET_PUBLISH, "gateway");
+  assert.equal(gated.GIT_AUTHOR_EMAIL, "ada@example.com");
 });
 
 function response() {

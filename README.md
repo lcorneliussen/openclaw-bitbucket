@@ -8,13 +8,15 @@ Bitbucket Cloud for [OpenClaw](https://docs.openclaw.ai), in two parts:
   repository's `origin`.
 - a **plugin** that gives a shared gateway personal Bitbucket logins. Each
   signed-in person connects their own account on a page the gateway serves,
-  and commands in the sessions they own push and open pull requests as them.
+  and commands in the sessions they own push and open pull requests as them,
+  or, with `execLogin` off, only the person does, through the gateway, after
+  confirming.
 
 ## What is in here
 
 | Path | What it is |
 |---|---|
-| `index.js`, `lib/` | The plugin: the connect page and the exec environment hook |
+| `index.js`, `lib/` | The plugin: the connect page, the exec environment hook and the gateway's confirmed publish |
 | `skills/bitbucket/SKILL.md` | The skill: forge detection, auth, pull requests, comments, pipelines |
 | `skills/bitbucket/scripts/git-forge` | Prints `<forge> <owner> <repo>` for a checkout's remote |
 | `skills/bitbucket/scripts/bb` | `twg bb` with the login the session was given |
@@ -113,6 +115,35 @@ in its own browser tab. Behind a sign-in proxy whose session cookie is not
 sent to framed pages, the tab does not load at all; the direct address still
 works. Set `controlUiTab` to `false` to hide it.
 
+## Publishing from the gateway
+
+The plugin can publish a session's managed worktree itself, as the person
+who asks and only once they confirm. It is the counterpart of OpenClaw's
+`sessions.github.publish` with a personal GitHub connection: the token stays
+in the gateway and the agent takes no part. A Control UI calls three session
+actions with `plugins.sessionAction` (`pluginId: "bitbucket"`):
+
+| Action | Payload | Answer |
+|---|---|---|
+| `publish-options` | `{dest?}` | your account, or `null`, and the worktree's repository, branch, head, destination and uncommitted files |
+| `publish` | `{dest?, title?, draft?}` | `needs_confirmation` with a `requestId` and a `confirmation` naming the account, branch, commit, destination and a `requestDigest`; `not_connected` without a login |
+| `publish-confirm` | `{requestId, requestDigest}` | `published` with the pull request's `url`, `number` and whether it was `created` |
+
+The login is the signed-in person's own, never the session owner's or the
+gateway's. Only the person who asked can confirm, within ten minutes, once,
+and only while the worktree is still on the confirmed commit. Confirming
+pushes that commit to the worktree's branch without forcing, then finds the
+open pull request into the destination (the repository's default branch
+unless named) or opens one, a draft unless `draft` is `false`. Nothing is
+committed: uncommitted files stay behind, and the confirmation counts them.
+When origin has commits the branch lacks, the push fails and says to catch up.
+
+Set `execLogin` to `false` so that this is the only way to push. Commands in
+people's sessions then still commit as their owner but get no login, and the
+skill tells the agent to leave publishing to the person. Login files remain
+readable by the gateway's OS user, so this is a rule for agents that follow
+the skill, not isolation; sandboxes are (see above).
+
 ## Configuration
 
 `plugins.entries.bitbucket.config`:
@@ -120,6 +151,7 @@ works. Set `controlUiTab` to `false` to hide it.
 | Key | Default | Meaning |
 |---|---|---|
 | `gitIdentity` | `true` | Set the Git author and committer to the session owner's Bitbucket account |
+| `execLogin` | `true` | Give commands in a person's sessions their login. `false`: only the gateway's confirmed publish pushes |
 | `controlUiTab` | `true` | Show the Bitbucket tab in the Control UI |
 
 ## Development

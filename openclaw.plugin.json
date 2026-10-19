@@ -17,6 +17,11 @@
         "default": true,
         "description": "Set the Git author and committer of a session's commands to the session owner's Bitbucket account."
       },
+      "execLogin": {
+        "type": "boolean",
+        "default": true,
+        "description": "Give the commands in a person's sessions their Bitbucket login. Off, agents cannot push or write pull requests, and publishing goes only through the gateway's confirmed publish."
+      },
       "controlUiTab": {
         "type": "boolean",
         "default": true,

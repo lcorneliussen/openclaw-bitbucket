@@ -63,6 +63,10 @@ function firstObject(text) {
   return null;
 }
 
+if (process.env.BITBUCKET_PUBLISH === "gateway") {
+  refuse("this gateway publishes Bitbucket repositories itself, as the person who confirms it: commit the work and tell them it is ready to publish from the Control UI");
+}
+
 const input = firstObject(fs.readFileSync(file ?? 0, "utf8"));
 if (!input) refuse("no JSON intent on stdin or in the file given");
 const intents = Array.isArray(input.intents) ? input.intents : [input];

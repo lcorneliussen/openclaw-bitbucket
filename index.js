@@ -10,6 +10,7 @@ import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-
 import { BitbucketRejected, verifyToken } from "./lib/bitbucket.js";
 import { loginFile, readLogin, removeLogin, writeLogin } from "./lib/logins.js";
 import { renderPage } from "./lib/page.js";
+import { createPublisher } from "./lib/publish.js";
 
 export const CONNECT_PATH = "/plugins/bitbucket/connect";
 const TICKET_TTL_MS = 15 * 60_000;
@@ -38,8 +39,13 @@ export async function sessionOwnerProfileId(getSessionEntry, sessionKey, agentId
 // Environment for one exec. BITBUCKET_LOGIN_FILE is always answered, empty
 // when the owner has no login: plugin values override what the agent passes,
 // so a command cannot point itself at somebody else's file through `env`.
-export async function execEnv({ stateDir, getSessionEntry, gitIdentity }, event, ctx) {
+//
+// With `execLogin` off, commands get the owner's name for their commits but
+// no login: pushing and pull requests then go through the gateway's
+// confirmed publish only, and BITBUCKET_PUBLISH says so.
+export async function execEnv({ stateDir, getSessionEntry, gitIdentity, execLogin = true }, event, ctx) {
   const env = { BITBUCKET_LOGIN_FILE: "", BITBUCKET_CONNECT_PATH: CONNECT_PATH };
+  if (!execLogin) env.BITBUCKET_PUBLISH = "gateway";
   // The login file exists on the gateway's own disk only.
   if (event.host !== "gateway") return env;
   const profileId = await sessionOwnerProfileId(
@@ -49,7 +55,7 @@ export async function execEnv({ stateDir, getSessionEntry, gitIdentity }, event,
   );
   const login = profileId ? await readLogin(stateDir, profileId) : undefined;
   if (!login) return env;
-  env.BITBUCKET_LOGIN_FILE = loginFile(stateDir, profileId);
+  if (execLogin) env.BITBUCKET_LOGIN_FILE = loginFile(stateDir, profileId);
   env.BITBUCKET_USER = login.user;
   env.TWG_BBC_USER = login.user;
   if (gitIdentity) {
@@ -198,7 +204,7 @@ export default definePluginEntry({
     api.on("resolve_exec_env", async (event, ctx) => {
       try {
         return await execEnv(
-          { stateDir, getSessionEntry, gitIdentity: config.gitIdentity !== false },
+          { stateDir, getSessionEntry, gitIdentity: config.gitIdentity !== false, execLogin: config.execLogin !== false },
           event,
           ctx,
         );
@@ -209,13 +215,40 @@ export default definePluginEntry({
       }
     });
 
+    // Publishing a session's worktree as the person who asks, once they
+    // confirm. A Control UI calls these with plugins.sessionAction.
+    const currentProfile = () => getPluginRuntimeGatewayRequestScope()?.client?.authenticatedUserProfile;
+    const publisher = createPublisher({ stateDir, getSessionEntry, currentProfile });
+    const payload = (properties) => ({ type: "object", additionalProperties: false, properties });
+    api.session.controls.registerSessionAction({
+      id: "publish-options",
+      description: "What publishing this session's worktree to Bitbucket would push, and with whose login: yours.",
+      requiredScopes: ["operator.read"],
+      schema: payload({ dest: { type: "string" } }),
+      handler: publisher.options,
+    });
+    api.session.controls.registerSessionAction({
+      id: "publish",
+      description: "Ask to push this session's worktree branch to Bitbucket and open a draft pull request with your own login. Nothing happens until you confirm.",
+      requiredScopes: ["operator.write"],
+      schema: payload({ dest: { type: "string" }, title: { type: "string" }, draft: { type: "boolean" } }),
+      handler: publisher.publish,
+    });
+    api.session.controls.registerSessionAction({
+      id: "publish-confirm",
+      description: "Confirm a Bitbucket publication you asked for: pushes the branch and opens or finds its pull request.",
+      requiredScopes: ["operator.write"],
+      schema: { ...payload({ requestId: { type: "string" }, requestDigest: { type: "string" } }), required: ["requestId", "requestDigest"] },
+      handler: publisher.confirm,
+    });
+
     api.registerHttpRoute({
       path: CONNECT_PATH,
       auth: "gateway",
       match: "exact",
       handler: createConnectHandler({
         stateDir,
-        currentProfile: () => getPluginRuntimeGatewayRequestScope()?.client?.authenticatedUserProfile,
+        currentProfile,
         log,
       }),
     });
