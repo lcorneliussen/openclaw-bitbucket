@@ -43,7 +43,8 @@ agent will follow.
 openclaw plugins install git:github.com/lcorneliussen/openclaw-bitbucket@v0.3.0 --accept-capabilities
 ```
 
-The plugin brings the skill with it. Restart the gateway afterwards. Keep the
+The plugin brings the skill with it. `openclaw plugins reload bitbucket` loads
+it into a running gateway without a restart. Keep the
 `github` skill enabled if the agent also works on GitHub repositories, and
 make the routing explicit in the agent's `AGENTS.md`:
 
@@ -65,6 +66,16 @@ skill passes the helper on the command line when a push is refused.
 The skill alone, without the plugin, is `skills/bitbucket/`: copy it into a
 directory named in `skills.load.extraDirs`. The tag `v0.1.0` still installs
 with `openclaw skills install`.
+
+### Upgrade
+
+Install the new tag over the old one and reload it. People's logins and the
+plugin's configuration stay as they are.
+
+```bash
+openclaw plugins install git:github.com/lcorneliussen/openclaw-bitbucket@<tag> --force --accept-capabilities
+openclaw plugins reload bitbucket
+```
 
 ## Personal logins
 
