@@ -12,7 +12,7 @@
 // opened and deletes the branch; it never touches the main branch.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
@@ -48,9 +48,12 @@ const git = (cwd, ...args) =>
 
 const branch = `openclaw/live-${Date.now()}`;
 const opened = new Set();
+let root;
 
 after(async () => {
   if (skip) return;
+  // The login file holds the real token.
+  if (root) await rm(root, { recursive: true, force: true });
   for (const id of opened) {
     const { status } = await api("POST", `/pullrequests/${id}/decline`);
     if (status !== 200) console.error(`declining pull request ${id}: HTTP ${status}; decline it by hand`);
@@ -60,9 +63,13 @@ after(async () => {
 });
 
 test("the gateway publishes a confirmed commit to Bitbucket, into one draft pull request, and never forces", { skip }, async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "bitbucket-live-"));
+  root = await mkdtemp(path.join(tmpdir(), "bitbucket-live-"));
   const work = path.join(root, "work");
-  execFileSync("git", ["clone", "-q", `https://bitbucket.org/${repo}.git`, work], { env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+  git(root, "clone", "-q", `https://bitbucket.org/${repo}.git`, work);
+  // Without origin/HEAD the destination has to come from Bitbucket's API.
+  git(work, "remote", "set-head", "origin", "-d");
+  const mainBranch = (await api("GET", "")).json?.mainbranch?.name;
+  assert.ok(mainBranch, "the repository has a main branch");
   git(work, "switch", "-qc", branch);
   await writeFile(path.join(work, "live.txt"), "one\n");
   git(work, "add", "live.txt");
@@ -85,12 +92,16 @@ test("the gateway publishes a confirmed commit to Bitbucket, into one draft pull
   // The main branch comes from Bitbucket when the clone does not say.
   const options = await publisher.options({ sessionKey: "repo-session", agentId: "main", payload: {} });
   assert.equal(options.ok, true, options.error);
+  assert.equal(options.result.repo.dest, mainBranch);
+  assert.equal(options.result.account.user, user);
 
   const first = await publish();
   assert.equal(first.ok, true, first.error);
+  // Recorded first, so that it is declined even when an assertion fails.
+  if (first.result.number) opened.add(first.result.number);
   assert.equal(first.result.created, true);
   assert.equal(first.result.account, user);
-  opened.add(first.result.number);
+  assert.equal(first.result.dest, mainBranch);
   const pr = await api("GET", `/pullrequests/${first.result.number}`);
   assert.equal(pr.status, 200);
   assert.equal(pr.json.source.branch.name, branch);
