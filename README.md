@@ -176,6 +176,21 @@ the skill, not isolation; sandboxes are (see above).
 npm test
 ```
 
+`npm test` uses a local bare repository and a fake API. The gateway publish
+also has a test against real Bitbucket, skipped unless it is given a
+throwaway repository and an API token with read and write on repositories
+and pull requests:
+
+```bash
+BITBUCKET_LIVE_REPO=<workspace>/<throwaway-repo> \
+BITBUCKET_LIVE_USER=<account e-mail> BITBUCKET_LIVE_TOKEN=<API token> \
+  node --test test/publish.live.test.js
+```
+
+It pushes a branch `openclaw/live-<time>`, publishes twice into one draft
+pull request, checks that a branch moved on Bitbucket is not forced, then
+declines the pull request and deletes the branch.
+
 ## License
 
 MIT
