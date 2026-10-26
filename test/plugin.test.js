@@ -115,6 +115,31 @@ const request = (method, form) =>
   Object.assign(Readable.from(form ? [Buffer.from(new URLSearchParams(form).toString())] : []), { method });
 const ticketOf = (html) => /name="ticket" value="([^"]+)"/.exec(html)[1];
 
+test("connect pages preserve the same-origin form Origin, including when retrying an error", async () => {
+  const handler = index.createConnectHandler({
+    stateDir: await stateDir(),
+    currentProfile: () => ({ profileId: "p-ada", displayName: "Ada" }),
+    verify: async () => { throw new BitbucketRejected("Token rejected."); },
+  });
+  for (const method of ["GET", "HEAD", "POST"]) {
+    const res = response();
+    await handler(request(method, method === "POST" ? { ticket: "expired" } : undefined), res);
+    assert.equal(res.statusCode, method === "POST" ? 400 : 200);
+    assert.equal(res.headers["referrer-policy"], "same-origin");
+    // The document policy also survives a gateway's no-referrer header.
+    assert.match(res.body, /<head>[\s\S]*<meta name="referrer" content="same-origin">[\s\S]*<\/head>/);
+
+    if (method === "POST") {
+      const retry = response();
+      await handler(request("POST", { ticket: ticketOf(res.body), action: "connect", user: "ada@example.com", token: "invalid-test-token" }), retry);
+      assert.equal(retry.statusCode, 400);
+      assert.match(retry.body, /Token rejected/);
+      assert.equal(retry.headers["referrer-policy"], "same-origin");
+      assert.match(retry.body, /<meta name="referrer" content="same-origin">/);
+    }
+  }
+});
+
 test("the page stores a login for the signed-in person only", async () => {
   const dir = await stateDir();
   let profile = { profileId: "p-ada", displayName: "Ada" };
