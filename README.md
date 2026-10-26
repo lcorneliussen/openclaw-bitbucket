@@ -40,7 +40,7 @@ Pin a tag; a plugin runs inside the gateway and a skill is instructions an
 agent will follow.
 
 ```bash
-openclaw plugins install git:github.com/lcorneliussen/openclaw-bitbucket@v0.3.0 --accept-capabilities
+openclaw plugins install git:github.com/lcorneliussen/openclaw-bitbucket@v0.3.1 --accept-capabilities
 ```
 
 The plugin brings the skill with it. `openclaw plugins reload bitbucket` loads
