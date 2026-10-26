@@ -40,7 +40,7 @@ Pin a tag; a plugin runs inside the gateway and a skill is instructions an
 agent will follow.
 
 ```bash
-openclaw plugins install git:github.com/lcorneliussen/openclaw-bitbucket@v0.3.1 --accept-capabilities
+openclaw plugins install git:github.com/lcorneliussen/openclaw-bitbucket@v0.3.2 --accept-capabilities
 ```
 
 The plugin brings the skill with it. `openclaw plugins reload bitbucket` loads
@@ -129,9 +129,10 @@ identity either. Plugin values override anything a command passes in `env`, so
 
 The tab shows whether you are connected. OpenClaw renders plugin pages in a
 read-only frame, so the form is hidden there and the page asks you to open it
-in its own browser tab. Behind a sign-in proxy whose session cookie is not
-sent to framed pages, the tab does not load at all; the direct address still
-works. Set `controlUiTab` to `false` to hide it.
+in its own browser tab, displaying the full selectable address. Behind a
+sign-in proxy whose session cookie is not sent to framed pages, the tab does
+not load at all; the direct address still works. Set `controlUiTab` to `false`
+to hide it.
 
 ## Publishing from the gateway
 
