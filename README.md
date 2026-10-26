@@ -98,6 +98,13 @@ openclaw plugins reload bitbucket
 
 3. `bb` and the git credential helper read the token from that file.
 
+Behind trusted-proxy auth, include the gateway's browser origin in
+`gateway.controlUi.allowedOrigins`. The connect page uses a `same-origin`
+referrer policy in its HTML and response header so browsers keep that origin
+on form POSTs, even if the gateway sets a `no-referrer` response header.
+Cross-origin requests still send no referrer; the gateway's origin checks and
+the form's single-use tickets remain in effect.
+
 The token is never placed in the environment: OpenClaw records plugin-supplied
 environment in approval and audit metadata. The agent does not choose the
 identity either. Plugin values override anything a command passes in `env`, so

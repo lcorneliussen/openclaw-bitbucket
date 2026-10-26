@@ -99,7 +99,7 @@ export function createConnectHandler({ stateDir, currentProfile, verify = verify
     res.statusCode = status;
     res.setHeader("content-type", "text/html; charset=utf-8");
     res.setHeader("cache-control", "no-store");
-    res.setHeader("referrer-policy", "no-referrer");
+    res.setHeader("referrer-policy", "same-origin");
     res.setHeader("x-content-type-options", "nosniff");
     res.setHeader(
       "content-security-policy",
