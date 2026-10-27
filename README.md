@@ -40,7 +40,7 @@ Pin a tag; a plugin runs inside the gateway and a skill is instructions an
 agent will follow.
 
 ```bash
-openclaw plugins install git:github.com/lcorneliussen/openclaw-bitbucket@v0.3.3 --accept-capabilities
+openclaw plugins install git:github.com/lcorneliussen/openclaw-bitbucket@v0.3.4 --accept-capabilities
 ```
 
 The plugin brings the skill with it. `openclaw plugins reload bitbucket` loads
@@ -145,7 +145,7 @@ actions with `plugins.sessionAction` (`pluginId: "bitbucket"`):
 | Action | Payload | Answer |
 |---|---|---|
 | `publish-options` | `{dest?}` | your account, or `null`, and the worktree's repository, branch, head and destination |
-| `publish` | `{dest?, title?, draft?}` | `needs_confirmation` with a `requestId` and a `confirmation` naming the account, branch, commit, destination and a `requestDigest`; `not_connected` without a login |
+| `publish` | `{dest?, title?, description?, draft?}` | `needs_confirmation` with a `requestId` and a `confirmation` naming the account, branch, commit, destination, proposed title/description and a `requestDigest`; `not_connected` without a login |
 | `publish-confirm` | `{requestId, requestDigest}` | `published` with the pull request's `url`, `number` and whether it was `created` |
 
 The login is the signed-in person's own, never the session owner's or the
@@ -161,6 +161,10 @@ committed: uncommitted files stay behind. Nothing reads file contents in
 the worktree either, so no filter driver its config names runs on the
 gateway.
 When origin has commits the branch lacks, the push fails and says to catch up.
+Version 0.3.4 and later accepts a Markdown `description`, preserves its exact
+text in the confirmation and binds it into the request digest. It is used only
+when creating a pull request. Publishing to an existing PR preserves its title
+and description, including human edits. Older callers may omit the description.
 After a successful push, the checkout's remote-tracking branch records the
 confirmed commit so status can distinguish pushed commits from new local work.
 This happens before the pull-request API calls, which can fail independently.

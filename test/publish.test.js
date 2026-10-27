@@ -84,6 +84,7 @@ test("asking pushes nothing; confirming pushes the branch and opens a draft pull
   assert.equal(c.branch, "openclaw/add-thing");
   assert.equal(c.dest, "main");
   assert.equal(c.title, "Add the thing");
+  assert.equal(c.description, "");
   assert.equal(c.head, git(f.work, "rev-parse", "HEAD"));
   assert.equal(git(f.bare, "branch", "--list", "openclaw/add-thing"), "", "nothing is pushed before confirming");
   assert.equal(f.calls.filter((c) => /pullrequests/.test(c.url)).length, 0, "no pull request is asked for before confirming");
@@ -100,7 +101,7 @@ test("asking pushes nothing; confirming pushes the branch and opens a draft pull
   assert.match(query.url, /^https:\/\/api\.test\/2\.0\/repositories\/example-ws\/docs\/pullrequests\?q=/);
   assert.match(decodeURIComponent(query.url), /source\.repository\.full_name="example-ws\/docs"/, "a fork's pull request is not reused");
   assert.equal(create.method, "POST");
-  assert.deepEqual(create.body, { title: "Add the thing", draft: true, source: { branch: { name: "openclaw/add-thing" } }, destination: { branch: { name: "main" } } });
+  assert.deepEqual(create.body, { title: "Add the thing", description: "", draft: true, source: { branch: { name: "openclaw/add-thing" } }, destination: { branch: { name: "main" } } });
   assert.equal(create.auth, "Basic " + Buffer.from("ada@example.com:secret-token").toString("base64"));
 
   const again = await confirm(f.publisher, out);
@@ -203,6 +204,33 @@ test("a title can be given", async () => {
   assert.equal("uncommitted" in out.result.confirmation, false);
 });
 
+test("the exact Markdown description is confirmed, digest-bound and sent when creating a PR", async () => {
+  const f = await fixture();
+  const description = "# Summary\n\n- Preserve **Markdown** 🗂️.\n\n```sh\nwtc status\n```\n";
+  const out = await ask(f.publisher, { title: "Proposed title", description });
+  const changed = await ask(f.publisher, { title: "Proposed title", description: description + "Changed.\n" });
+  assert.equal(out.result.confirmation.description, description);
+  assert.notEqual(out.result.confirmation.requestDigest, changed.result.confirmation.requestDigest);
+  const refused = await confirm(f.publisher, out, { requestDigest: changed.result.confirmation.requestDigest });
+  assert.equal(refused.ok, false);
+  assert.match(refused.error, /does not match/);
+  assert.equal(git(f.bare, "branch", "--list", "openclaw/add-thing"), "", "a different description digest cannot authorize a push");
+  const done = await confirm(f.publisher, out);
+  assert.equal(done.ok, true, done.error);
+  const create = f.calls.find((c) => c.method === "POST");
+  assert.equal(create.body.title, "Proposed title");
+  assert.equal(create.body.description, description);
+});
+
+test("a description without a title keeps the commit subject as the title", async () => {
+  const f = await fixture();
+  const out = await ask(f.publisher, { description: "Why this change matters.\n\nChecked locally.\n" });
+  assert.equal(out.result.confirmation.title, "Add the thing");
+  const done = await confirm(f.publisher, out);
+  assert.equal(done.ok, true, done.error);
+  assert.equal(f.calls.find((c) => c.method === "POST").body.description, out.result.confirmation.description);
+});
+
 test("a session without a worktree, or with a GitHub origin, is refused", async () => {
   const f = await fixture();
   const res = await f.publisher.publish({ sessionKey: "other", agentId: "main", payload: {} });
@@ -221,11 +249,13 @@ test("a request expires after ten minutes, and nothing is pushed then", async ()
 
 test("an open pull request is found, not opened again, and draft: false opens a ready one", async () => {
   const f = await fixture();
-  f.open.push({ id: 5, links: { html: { href: "https://bitbucket.org/example-ws/docs/pull-requests/5" } } });
-  const done = await confirm(f.publisher, await ask(f.publisher));
+  f.open.push({ id: 5, title: "Human title", description: "Human description", links: { html: { href: "https://bitbucket.org/example-ws/docs/pull-requests/5" } } });
+  const done = await confirm(f.publisher, await ask(f.publisher, { title: "Proposed replacement", description: "Proposed replacement body" }));
   assert.equal(done.result.created, false);
   assert.equal(done.result.number, 5);
-  assert.equal(f.calls.some((c) => c.method === "POST"), false);
+  assert.equal(f.calls.some((c) => c.method !== "GET"), false, "existing PR metadata is never rewritten on push");
+  assert.equal(f.open[0].title, "Human title");
+  assert.equal(f.open[0].description, "Human description");
   f.open.length = 0;
   await writeFile(path.join(f.work, "e.txt"), "e\n");
   git(f.work, "add", "e.txt");
