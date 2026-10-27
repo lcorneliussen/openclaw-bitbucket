@@ -40,7 +40,7 @@ Pin a tag; a plugin runs inside the gateway and a skill is instructions an
 agent will follow.
 
 ```bash
-openclaw plugins install git:github.com/lcorneliussen/openclaw-bitbucket@v0.3.2 --accept-capabilities
+openclaw plugins install git:github.com/lcorneliussen/openclaw-bitbucket@v0.3.3 --accept-capabilities
 ```
 
 The plugin brings the skill with it. `openclaw plugins reload bitbucket` loads
@@ -161,6 +161,12 @@ committed: uncommitted files stay behind. Nothing reads file contents in
 the worktree either, so no filter driver its config names runs on the
 gateway.
 When origin has commits the branch lacks, the push fails and says to catch up.
+After a successful push, the checkout's remote-tracking branch records the
+confirmed commit so status can distinguish pushed commits from new local work.
+This happens before the pull-request API calls, which can fail independently.
+Concurrent tracking updates are preserved. If the push succeeds but its local
+record cannot be updated, the published response includes a `warning` with a
+recovery step; pull-request creation continues.
 
 Set `execLogin` to `false` so that this is the only way to push. Commands in
 people's sessions then still commit as their owner but get no login, and the

@@ -1,6 +1,6 @@
 {
   "name": "openclaw-bitbucket",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Bitbucket Cloud for OpenClaw: a skill for pull requests, review comments and pipelines, and personal Bitbucket logins for shared gateways",
   "license": "MIT",
   "type": "module",
