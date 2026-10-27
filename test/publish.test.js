@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -13,7 +13,7 @@ const ORIGIN = "https://bitbucket.org/example-ws/docs.git";
 
 // A worktree on openclaw/add-thing whose origin "is" Bitbucket: git is told to
 // use a local bare repository instead of that URL.
-async function fixture({ connected = true } = {}) {
+async function fixture({ connected = true, failPullRequest = false } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), "bitbucket-publish-"));
   const bare = path.join(root, "origin.git");
   const work = path.join(root, "work");
@@ -41,6 +41,7 @@ async function fixture({ connected = true } = {}) {
   const open = [];
   const fetchImpl = async (url, init) => {
     calls.push({ url, method: init.method, auth: init.headers.authorization, body: init.body && JSON.parse(init.body) });
+    if (failPullRequest && /\/pullrequests/.test(url)) return new Response("Try later", { status: 503 });
     const value = /\/repositories\/[^/]+\/[^/?]+$/.test(url)
       ? { mainbranch: { name: "main" } }
       : init.method === "GET"
@@ -59,7 +60,7 @@ async function fixture({ connected = true } = {}) {
     apiUrl: "https://api.test/2.0",
     now: () => clock.t,
   });
-  return { work, bare, publisher, calls, open, now: clock, as: (id) => { profileId = id; } };
+  return { work, bare, publisher, calls, open, gitEnv, now: clock, as: (id) => { profileId = id; } };
 }
 
 const ask = (p, payload = {}) => p.publish({ sessionKey: "repo-session", agentId: "main", payload });
@@ -93,6 +94,7 @@ test("asking pushes nothing; confirming pushes the branch and opens a draft pull
   assert.equal(done.result.url, "https://bitbucket.org/example-ws/docs/pull-requests/7");
   assert.equal(done.result.created, true);
   assert.equal(git(f.bare, "rev-parse", "openclaw/add-thing"), c.head);
+  assert.equal(git(f.work, "rev-parse", "refs/remotes/origin/openclaw/add-thing"), c.head, "the refreshed checkout knows these commits were pushed");
   const [query, create] = f.calls.filter((c) => /pullrequests/.test(c.url));
   assert.match(query.url, /^https:\/\/api\.test\/2\.0\/repositories\/example-ws\/docs\/pullrequests\?q=/);
   assert.match(decodeURIComponent(query.url), /source\.repository\.full_name="example-ws\/docs"/, "a fork's pull request is not reused");
@@ -111,6 +113,43 @@ test("without a login of their own, the person is told to connect", async () => 
   const out = await ask(f.publisher);
   assert.equal(out.ok, false);
   assert.match(out.error, /sign in as a person/);
+});
+
+test("a successful push is recorded even when the later pull-request request fails", async () => {
+  const f = await fixture({ failPullRequest: true });
+  const out = await ask(f.publisher);
+  const head = out.result.confirmation.head;
+  const done = await confirm(f.publisher, out);
+  assert.equal(done.ok, false);
+  assert.match(done.error, /503/);
+  assert.equal(git(f.bare, "rev-parse", "openclaw/add-thing"), head);
+  assert.equal(git(f.work, "rev-parse", "refs/remotes/origin/openclaw/add-thing"), head);
+  assert.equal(git(f.work, "rev-parse", "HEAD"), head);
+  assert.equal(git(f.work, "status", "--porcelain"), "");
+});
+
+test("publication does not overwrite newer tracking evidence recorded during the push", async () => {
+  const f = await fixture();
+  const newer = git(f.work, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "Concurrent remote update");
+  f.gitEnv.PUSH_STATUS_TEST_GIT_DIR = path.join(f.work, ".git");
+  f.gitEnv.PUSH_STATUS_TEST_HEAD = newer;
+  await writeFile(path.join(f.bare, "hooks", "post-receive"), '#!/bin/sh\ngit --git-dir="$PUSH_STATUS_TEST_GIT_DIR" update-ref refs/remotes/origin/openclaw/add-thing "$PUSH_STATUS_TEST_HEAD"\n', { mode: 0o755 });
+  const done = await confirm(f.publisher, await ask(f.publisher));
+  assert.equal(done.ok, true, done.error);
+  assert.equal(git(f.work, "rev-parse", "refs/remotes/origin/openclaw/add-thing"), newer);
+});
+
+test("a local recording failure reports that the push already succeeded", async () => {
+  const f = await fixture();
+  const dir = path.join(f.work, ".git", "refs", "remotes", "origin");
+  await mkdir(path.join(dir, "openclaw"), { recursive: true });
+  await writeFile(path.join(dir, "openclaw", "add-thing.lock"), "held by another writer\n");
+  const out = await ask(f.publisher);
+  const done = await confirm(f.publisher, out);
+  assert.equal(done.ok, false);
+  assert.match(done.error, /commits were pushed.*local status could not be recorded/);
+  assert.equal(git(f.bare, "rev-parse", "openclaw/add-thing"), out.result.confirmation.head);
+  assert.equal(f.calls.some((c) => /pullrequests/.test(c.url)), false);
 });
 
 test("only the person who asked confirms, and only what they were shown", async () => {
@@ -139,6 +178,7 @@ test("a branch origin has moved is not forced: the person is told to catch up", 
   const res = await confirm(f.publisher, out);
   assert.equal(res.ok, false);
   assert.match(res.error, /catch up/);
+  assert.equal(git(f.work, "rev-parse", "refs/remotes/origin/openclaw/add-thing"), first.result.confirmation.head, "a refused push never advances publication evidence");
 });
 
 test("a title can be given", async () => {
@@ -185,6 +225,7 @@ test("the worktree's git config and hooks do not take part in the push", async (
   const marker = path.join(f.work, "..", "hook-ran");
   // A pre-push hook and a push URL elsewhere, as an agent could set them.
   await writeFile(path.join(f.work, ".git", "hooks", "pre-push"), `#!/bin/sh\ntouch ${marker}\nexit 1\n`, { mode: 0o755 });
+  await writeFile(path.join(f.work, ".git", "hooks", "reference-transaction"), `#!/bin/sh\ntouch ${marker}\nexit 1\n`, { mode: 0o755 });
   git(f.work, "config", "remote.origin.pushurl", path.join(f.work, "..", "elsewhere.git"));
   const done = await confirm(f.publisher, await ask(f.publisher));
   assert.equal(done.ok, true, done.error);
