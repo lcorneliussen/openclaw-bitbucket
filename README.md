@@ -165,7 +165,8 @@ After a successful push, the checkout's remote-tracking branch records the
 confirmed commit so status can distinguish pushed commits from new local work.
 This happens before the pull-request API calls, which can fail independently.
 Concurrent tracking updates are preserved. If the push succeeds but its local
-record cannot be updated, the response says so explicitly.
+record cannot be updated, the published response includes a `warning` with a
+recovery step; pull-request creation continues.
 
 Set `execLogin` to `false` so that this is the only way to push. Commands in
 people's sessions then still commit as their owner but get no login, and the

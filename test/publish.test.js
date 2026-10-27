@@ -146,10 +146,22 @@ test("a local recording failure reports that the push already succeeded", async 
   await writeFile(path.join(dir, "openclaw", "add-thing.lock"), "held by another writer\n");
   const out = await ask(f.publisher);
   const done = await confirm(f.publisher, out);
-  assert.equal(done.ok, false);
-  assert.match(done.error, /commits were pushed.*local status could not be recorded/);
+  assert.equal(done.ok, true, done.error);
+  assert.match(done.result.warning, /push succeeded, but local status could not be updated/);
   assert.equal(git(f.bare, "rev-parse", "openclaw/add-thing"), out.result.confirmation.head);
-  assert.equal(f.calls.some((c) => /pullrequests/.test(c.url)), false);
+  assert.equal(done.result.created, true, "the local warning does not block PR creation");
+});
+
+test("a stale prefix tracking ref warns without blocking the pull request", async () => {
+  const f = await fixture();
+  git(f.work, "update-ref", "refs/remotes/origin/openclaw", "origin/main");
+  const out = await ask(f.publisher);
+  const done = await confirm(f.publisher, out);
+  assert.equal(done.ok, true, done.error);
+  assert.equal(done.result.created, true);
+  assert.match(done.result.warning, /git fetch --prune origin/);
+  assert.equal(git(f.work, "rev-parse", "refs/remotes/origin/openclaw"), git(f.work, "rev-parse", "origin/main"), "the stale ref is left for its owner");
+  assert.equal(git(f.bare, "rev-parse", "openclaw/add-thing"), out.result.confirmation.head);
 });
 
 test("only the person who asked confirms, and only what they were shown", async () => {
