@@ -255,6 +255,7 @@ test("the publish actions are registered, and need a signed-in person", async ()
   index.default.register(api);
   assert.deepEqual(["publish-options", "publish", "publish-confirm"].map((id) => actions.get(id)?.requiredScopes?.[0]), ["operator.read", "operator.write", "operator.write"]);
   assert.deepEqual(actions.get("publish-confirm").schema.required, ["requestId", "requestDigest"]);
+  assert.equal(actions.get("publish").schema.properties.description.type, "string");
   // The stubbed SDK has no request scope, so there is no person to publish as.
   for (const id of ["publish-options", "publish", "publish-confirm"]) {
     const res = await actions.get(id).handler({ sessionKey: "s", agentId: "main", payload: { requestId: "r", requestDigest: "d" } });

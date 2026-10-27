@@ -231,7 +231,7 @@ export default definePluginEntry({
       id: "publish",
       description: "Ask to push this session's worktree branch to Bitbucket and open a draft pull request with your own login. Nothing happens until you confirm.",
       requiredScopes: ["operator.write"],
-      schema: payload({ dest: { type: "string" }, title: { type: "string" }, draft: { type: "boolean" } }),
+      schema: payload({ dest: { type: "string" }, title: { type: "string" }, description: { type: "string" }, draft: { type: "boolean" } }),
       handler: publisher.publish,
     });
     api.session.controls.registerSessionAction({
