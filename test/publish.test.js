@@ -91,6 +91,7 @@ test("asking pushes nothing; confirming pushes the branch and opens a draft pull
   const done = await confirm(f.publisher, out);
   assert.equal(done.ok, true, done.error);
   assert.equal(done.result.status, "published");
+  assert.equal(done.result.warning, undefined, "a recorded push has no status warning");
   assert.equal(done.result.url, "https://bitbucket.org/example-ws/docs/pull-requests/7");
   assert.equal(done.result.created, true);
   assert.equal(git(f.bare, "rev-parse", "openclaw/add-thing"), c.head);
@@ -137,6 +138,7 @@ test("publication does not overwrite newer tracking evidence recorded during the
   const done = await confirm(f.publisher, await ask(f.publisher));
   assert.equal(done.ok, true, done.error);
   assert.equal(git(f.work, "rev-parse", "refs/remotes/origin/openclaw/add-thing"), newer);
+  assert.equal(done.result.warning, undefined, "newer tracking evidence already records the pushed head");
 });
 
 test("a local recording failure reports that the push already succeeded", async () => {
