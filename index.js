@@ -79,7 +79,7 @@ async function readForm(req) {
 
 // The page and its form. `tickets` ties a form to the person it was rendered
 // for, so a request forged from another site cannot store or delete a login.
-export function createConnectHandler({ stateDir, currentProfile, verify = inspectToken, save = writeLogin, log }) {
+export function createConnectHandler({ stateDir, currentProfile, verify = inspectToken, load = readLogin, save = writeLogin, log }) {
   const tickets = new Map();
   const checks = new Map();
 
@@ -117,7 +117,7 @@ export function createConnectHandler({ stateDir, currentProfile, verify = inspec
     const person = profileId ? profile.displayName || profileId : undefined;
     const page = async (status, notice, observedCheck) => {
       let login;
-      try { login = profileId ? await readLogin(stateDir, profileId) : undefined; }
+      try { login = profileId ? await load(stateDir, profileId) : undefined; }
       catch {
         log?.warn?.("bitbucket: could not read the saved login");
         notice ??= { ok: false, text: "The saved login could not be read. Try again later." };
@@ -189,36 +189,42 @@ export function createConnectHandler({ stateDir, currentProfile, verify = inspec
     }
 
     const checking = form.get("action") === "check";
-    let existing;
-    try { existing = await readLogin(stateDir, profileId); }
-    catch {
-      await page(502, { ok: false, text: "The saved login could not be read. Try again later." });
-      return true;
-    }
-    if (checking && !existing) {
-      await page(400, { ok: false, text: "Connect Bitbucket before checking permissions." });
-      return true;
-    }
-    const user = checking ? existing.user : (form.get("user") ?? "").trim();
-    const token = checking ? existing.token : (form.get("token") ?? "").trim();
-    if (!/^[^\s@]+@[^\s@]+$/.test(user) || !token || /\s/.test(token)) {
-      await page(400, { ok: false, text: "Enter the account e-mail and the API token." });
-      return true;
-    }
     if (checks.has(profileId)) {
       await page(409, { ok: false, text: "Another Bitbucket login operation is running. Wait for it to finish." });
       return true;
     }
     const attempt = { cancelled: false, controller: new AbortController() };
+    // Register before the first file read so Disconnect can cancel that wait too.
     checks.set(profileId, attempt);
+    let existing, observed;
     const unchanged = async () => {
-      const current = await readLogin(stateDir, profileId);
+      const current = await load(stateDir, profileId);
       return !attempt.cancelled && current?.token === existing?.token && current?.user === existing?.user && current?.stored === existing?.stored;
     };
     try {
+      try { existing = await load(stateDir, profileId); }
+      catch {
+        await page(502, { ok: false, text: "The saved login could not be read. Try again later." });
+        return true;
+      }
+      if (attempt.cancelled) {
+        await page(409, { ok: false, text: "The login changed while checking. Try again." });
+        return true;
+      }
+      if (checking && !existing) {
+        await page(400, { ok: false, text: "Connect Bitbucket before checking permissions." });
+        return true;
+      }
+      const user = checking ? existing.user : (form.get("user") ?? "").trim();
+      const token = checking ? existing.token : (form.get("token") ?? "").trim();
+      if (!/^[^\s@]+@[^\s@]+$/.test(user) || !token || /\s/.test(token)) {
+        await page(400, { ok: false, text: "Enter the account e-mail and the API token." });
+        return true;
+      }
       const result = await verify(user, token, undefined, attempt.controller.signal);
       const { name, scopeCheck: checked } = typeof result === "string" ? { name: result, scopeCheck: scopeCheck() } : result;
-      if (!await unchanged()) {
+      observed = checked;
+      if (!await unchanged() || attempt.cancelled) {
         await page(409, { ok: false, text: "The login changed while checking. Try again." });
         return true;
       }
@@ -242,12 +248,17 @@ export function createConnectHandler({ stateDir, currentProfile, verify = inspec
         await page(409, { ok: false, text: "The login changed while checking. Try again." });
         return true;
       }
+      if (observed) {
+        log?.warn?.("bitbucket: could not save the login or permission-check result");
+        await page(502, { ok: false, text: checking ? "Permission check completed, but its result could not be saved." : "The Bitbucket login could not be saved. Any previous login was kept." }, checking ? observed : undefined);
+        return true;
+      }
       const rejected = error instanceof BitbucketRejected;
       const checked = checking && rejected ? error.scopeCheck ?? (error.credentialsRejected ? { status: "rejected", checkedAt: new Date().toISOString() } : undefined) : undefined;
       let recordingFailed = false;
       if (checked) {
         try {
-          if (await unchanged()) {
+          if (await unchanged() && !attempt.cancelled) {
             attempt.committing = save(stateDir, { ...existing, scopeCheck: checked });
             await attempt.committing;
           }

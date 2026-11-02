@@ -46,6 +46,19 @@ test("scope denials explain missing grants rather than rejecting valid credentia
   }
 });
 
+test("textual or malformed detail does not hide usable scope metadata in data", async () => {
+  const grants = REQUIRED_SCOPES.filter(s => s !== "read:user:bitbucket");
+  for (const detail of ["Permission denied", { required: ["read:user:bitbucket"], granted: "malformed" }, { required: [], granted: grants }]) {
+    const body = { error: { detail, data: { required: ["read:user:bitbucket"], granted: grants } } };
+    await assert.rejects(inspectToken("a@b.c", "t", response(403, body)), e => {
+      assert.ok(e instanceof BitbucketScopesMissing);
+      assert.deepEqual(e.scopeCheck.granted, grants);
+      assert.match(e.message, /read:user:bitbucket/);
+      return true;
+    });
+  }
+});
+
 test("missing, malformed, legacy and accepted-scope metadata cannot claim verified grants", async () => {
   for (const headers of [{}, { "x-accepted-oauth-scopes": REQUIRED_SCOPES.join(",") }, { "x-oauth-scopes": "repository:write,pullrequest:write,account,pipeline" }, { "x-oauth-scopes": "<script>" }]) {
     const result = await inspectToken("a@b.c", "t", response(200, undefined, headers));

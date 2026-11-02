@@ -106,6 +106,10 @@ openclaw plugins reload bitbucket
    result stays in the owner's private login file. Old login files remain
    usable and show that permissions have not been checked. Page views do not
    poll Bitbucket, and simultaneous checks for one person are refused.
+   If the existing login file is unreadable, replacement is refused to preserve
+   it; repair the file or its permissions before reconnecting. If saving a
+   completed check fails, the page shows the fresh result as unsaved, while the
+   previously saved credential and metadata stay unchanged.
 2. Before every `exec`, the gateway asks the plugin for environment. The
    plugin looks up who the session belongs to (the assigned owner, otherwise
    the signed-in person who created it; a spawned session follows its parent)
