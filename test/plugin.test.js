@@ -9,7 +9,8 @@ import { promisify } from "node:util";
 import { Readable } from "node:stream";
 
 import { loginFile, loginsDir, readLogin, writeLogin } from "../lib/logins.js";
-import { BitbucketRejected, verifyToken } from "../lib/bitbucket.js";
+import { BitbucketRejected, BitbucketScopesMissing, BitbucketUnavailable, verifyToken } from "../lib/bitbucket.js";
+import { REQUIRED_SCOPES, scopeCheck } from "../lib/scopes.js";
 
 const run = promisify(execFile);
 const scripts = fileURLToPath(new URL("../skills/bitbucket/scripts/", import.meta.url));
@@ -54,6 +55,17 @@ test("a login is stored for its owner only, in a private file", async () => {
 test("a login with a line break is refused", async () => {
   const dir = await stateDir();
   await assert.rejects(writeLogin(dir, { ...login("p"), token: "a\nuser=evil" }));
+});
+
+test("scope-check metadata round-trips privately without breaking old login files", async () => {
+  const dir = await stateDir();
+  await writeLogin(dir, login("old"));
+  assert.equal((await readLogin(dir, "old")).scopeCheck, undefined);
+  const checked = { ...login("new"), scopeCheck: scopeCheck(REQUIRED_SCOPES) };
+  const file = await writeLogin(dir, checked);
+  assert.deepEqual((await readLogin(dir, "new")).scopeCheck, checked.scopeCheck);
+  assert.equal((await stat(file)).mode & 0o777, 0o600);
+  await assert.rejects(writeLogin(dir, { ...checked, scopeCheck: { status: "verified", checkedAt: "invalid" } }));
 });
 
 test("the session owner is the assigned human, else the signed-in creator, else the parent's", async () => {
@@ -217,9 +229,201 @@ test("verifyToken tells a rejected token from an unreachable Bitbucket", async (
   await assert.rejects(verifyToken("a@b.c", "t", async () => { throw new Error("offline"); }), (e) => !(e instanceof BitbucketRejected));
 });
 
+test("saved-login permission checks use only the current owner's credential and never poll on views", async () => {
+  const dir = await stateDir();
+  await writeLogin(dir, login("p-ada"));
+  let checks = 0;
+  const handler = index.createConnectHandler({ stateDir: dir, currentProfile: () => ({ profileId: "p-ada", displayName: "Ada" }), verify: async (user, token) => {
+    checks++;
+    assert.equal(user, "ada@example.com");
+    assert.equal(token, "token-of-p-ada");
+    return { name: "Ada Example", scopeCheck: scopeCheck(REQUIRED_SCOPES) };
+  } });
+  let res = response();
+  await handler(request("GET"), res);
+  assert.equal(checks, 0);
+  const checked = response();
+  await handler(request("POST", { ticket: ticketOf(res.body), action: "check", user: "other@example.com", token: "injected-token" }), checked);
+  assert.equal(checked.statusCode, 200);
+  assert.match(checked.body, /Token permissions verified/);
+  assert.ok(!checked.body.includes("token-of-p-ada") && !checked.body.includes("injected-token"));
+  assert.equal((await readLogin(dir, "p-ada")).stored, "2026-01-02T03:04:05.000Z");
+  assert.equal((await readLogin(dir, "p-ada")).scopeCheck.status, "verified");
+  assert.equal(await readLogin(dir, "other"), undefined);
+  await handler(request("GET"), response());
+  assert.equal(checks, 1);
+});
+
+test("missing scopes reject replacements but update the saved login's explicit check result", async () => {
+  const dir = await stateDir();
+  await writeLogin(dir, login("p-ada"));
+  const handler = index.createConnectHandler({ stateDir: dir, currentProfile: () => ({ profileId: "p-ada" }), verify: async () => { throw new BitbucketScopesMissing([]); } });
+  const get = response(); await handler(request("GET"), get);
+  const refused = response(); await handler(request("POST", { ticket: ticketOf(get.body), action: "connect", user: "new@example.com", token: "new-token" }), refused);
+  assert.equal(refused.statusCode, 400);
+  assert.match(refused.body, /read:user:bitbucket/);
+  assert.equal((await readLogin(dir, "p-ada")).token, "token-of-p-ada");
+  const checked = response(); await handler(request("POST", { ticket: ticketOf(refused.body), action: "check" }), checked);
+  assert.equal(checked.statusCode, 400);
+  assert.match(checked.body, /Required token scopes missing/);
+  assert.equal((await readLogin(dir, "p-ada")).scopeCheck.status, "missing");
+});
+
+test("a concurrent check is refused and disconnect cannot be undone by its late response", async () => {
+  const dir = await stateDir();await writeLogin(dir, login("p-ada"));
+  let resolve, calls = 0;
+  const handler = index.createConnectHandler({ stateDir: dir, currentProfile: () => ({ profileId: "p-ada" }), verify: async () => {
+    calls++;return new Promise(r => { resolve = r; });
+  } });
+  const a = response(), b = response(), c = response();
+  await handler(request("GET"), a);await handler(request("GET"), b);await handler(request("GET"), c);
+  const pending = handler(request("POST", { ticket: ticketOf(a.body), action: "check" }), response());
+  while (!resolve) await new Promise(r => setImmediate(r));
+  const busy = response();await handler(request("POST", { ticket: ticketOf(b.body), action: "check" }), busy);
+  assert.equal(busy.statusCode, 409);assert.equal(calls, 1);
+  await handler(request("POST", { ticket: ticketOf(c.body), action: "disconnect" }), response());
+  resolve({ name: "Ada", scopeCheck: scopeCheck(REQUIRED_SCOPES) });await pending;
+  assert.equal(await readLogin(dir, "p-ada"), undefined);
+});
+
+test("disconnect waits for an already-started credential write and removes its result", async () => {
+  const dir = await stateDir();
+  let finishWrite, writing;
+  const started = new Promise(resolve => { writing = resolve; });
+  const handler = index.createConnectHandler({ stateDir: dir, currentProfile: () => ({ profileId: "p-ada" }),
+    verify: async () => ({ name: "Ada", scopeCheck: scopeCheck(REQUIRED_SCOPES) }),
+    save: async (...args) => { writing();await new Promise(resolve => { finishWrite = resolve; });return writeLogin(...args); },
+  });
+  const a = response(), b = response();await handler(request("GET"), a);await handler(request("GET"), b);
+  const connecting = response();
+  const pending = handler(request("POST", { ticket: ticketOf(a.body), action: "connect", user: "ada@example.com", token: "new-token" }), connecting);
+  await started;
+  const disconnected = response();const closing = handler(request("POST", { ticket: ticketOf(b.body), action: "disconnect" }), disconnected);
+  await new Promise(resolve => setImmediate(resolve));assert.equal(disconnected.statusCode, 0, "disconnect must finish after the write");
+  finishWrite();await Promise.all([pending, closing]);
+  assert.equal(disconnected.statusCode, 200);assert.equal(connecting.statusCode, 409);assert.equal(await readLogin(dir, "p-ada"), undefined);
+});
+
+test("disconnect cancels connect and check while their first credential read is pending", async () => {
+  for (const action of ["connect", "check"]) {
+    const dir = await stateDir();
+    await writeLogin(dir, login("p-ada"));
+    let holdNext = false, release, reading, calls = 0;
+    const started = new Promise(resolve => { reading = resolve; });
+    const gate = new Promise(resolve => { release = resolve; });
+    const handler = index.createConnectHandler({ stateDir: dir, currentProfile: () => ({ profileId: "p-ada" }),
+      load: async (...args) => {
+        if (holdNext) { holdNext = false; reading(); await gate; }
+        return readLogin(...args);
+      },
+      verify: async () => { calls++; return { name: "Ada", scopeCheck: scopeCheck(REQUIRED_SCOPES) }; },
+    });
+    const a = response(), b = response(), c = response();
+    await handler(request("GET"), a); await handler(request("GET"), b); await handler(request("GET"), c);
+    holdNext = true;
+    const connecting = response();
+    const pending = handler(request("POST", { ticket: ticketOf(a.body), action, user: "ada@example.com", token: "new-token" }), connecting);
+    await started;
+    const busy = response();
+    await handler(request("POST", { ticket: ticketOf(b.body), action: "check" }), busy);
+    assert.equal(busy.statusCode, 409);
+    const disconnected = response();
+    await handler(request("POST", { ticket: ticketOf(c.body), action: "disconnect" }), disconnected);
+    assert.equal(disconnected.statusCode, 200);
+    assert.equal(await readLogin(dir, "p-ada"), undefined);
+    release(); await pending;
+    assert.equal(connecting.statusCode, 409);
+    assert.equal(calls, 0, "a cancelled initial read must not start a provider request");
+    assert.equal(await readLogin(dir, "p-ada"), undefined);
+    const reconnected = response();
+    await handler(request("POST", { ticket: ticketOf(connecting.body), action: "connect", user: "ada@example.com", token: "fresh-token" }), reconnected);
+    assert.equal(reconnected.statusCode, 200);
+    assert.equal((await readLogin(dir, "p-ada")).token, "fresh-token");
+  }
+});
+
+test("initial read errors and validation exits release the owner's operation slot", async () => {
+  for (const mode of ["read-error", "missing-login", "invalid-input"]) {
+    const dir = await stateDir(); let failNext = false, calls = 0;
+    const handler = index.createConnectHandler({ stateDir: dir, currentProfile: () => ({ profileId: "p-ada" }),
+      load: async (...args) => { if (failNext) { failNext = false; throw Error("unreadable file"); } return readLogin(...args); },
+      verify: async () => { calls++; return "Ada"; },
+    });
+    const initial = response(); await handler(request("GET"), initial);
+    failNext = mode === "read-error";
+    const failed = response();
+    await handler(request("POST", { ticket: ticketOf(initial.body), action: mode === "missing-login" ? "check" : "connect" }), failed);
+    assert.equal(failed.statusCode, mode === "read-error" ? 502 : 400);
+    const connected = response();
+    await handler(request("POST", { ticket: ticketOf(failed.body), action: "connect", user: "ada@example.com", token: "fresh-token" }), connected);
+    assert.equal(connected.statusCode, 200);
+    assert.equal(calls, 1);
+  }
+});
+
+test("disconnect aborts the saved-login network check without waiting for its timeout", async () => {
+  const dir = await stateDir();await writeLogin(dir, login("p-ada"));let started, signal;
+  const ready = new Promise(resolve => { started = resolve; });
+  const handler = index.createConnectHandler({ stateDir: dir, currentProfile: () => ({ profileId: "p-ada" }), verify: async (_user, _token, _fetch, cancellation) => {
+    signal = cancellation;started();return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new BitbucketUnavailable("Cancelled read.")), { once: true }));
+  } });
+  const a = response(), b = response();await handler(request("GET"), a);await handler(request("GET"), b);
+  const checked = response();const pending = handler(request("POST", { ticket: ticketOf(a.body), action: "check" }), checked);await ready;
+  const disconnected = response();await handler(request("POST", { ticket: ticketOf(b.body), action: "disconnect" }), disconnected);await pending;
+  assert.equal(signal.aborted, true);assert.equal(disconnected.statusCode, 200);assert.equal(checked.statusCode, 409);assert.equal(await readLogin(dir, "p-ada"), undefined);
+});
+
+test("a denial clears a verified badge even when its metadata cannot be saved", async () => {
+  for (const fails of [false, true]) {
+    const dir = await stateDir();await writeLogin(dir, { ...login("p-ada"), scopeCheck: scopeCheck(REQUIRED_SCOPES) });
+    const failure = Object.assign(new BitbucketRejected("Access denied."), { scopeCheck: scopeCheck() });
+    const handler = index.createConnectHandler({ stateDir: dir, currentProfile: () => ({ profileId: "p-ada" }), verify: async () => { throw failure; }, save: fails ? async () => { throw Error("disk full"); } : writeLogin });
+    const initial = response();await handler(request("GET"), initial);
+    const res = response();await handler(request("POST", { ticket: ticketOf(initial.body), action: "check" }), res);
+    assert.equal(res.statusCode, 400);assert.match(res.body, /Access denied/);assert.match(res.body, /Token permissions unverified/);assert.doesNotMatch(res.body, /Token permissions verified/);
+    if (fails) assert.match(res.body, /result could not be saved/);
+    assert.equal((await readLogin(dir, "p-ada")).scopeCheck.status, fails ? "verified" : "unknown");
+    assert.equal((await readLogin(dir, "p-ada")).token, "token-of-p-ada");
+  }
+});
+
+test("a successful read with a failed save reports a local error and preserves the saved login", async () => {
+  for (const action of ["check", "connect"]) {
+    const dir = await stateDir();
+    const saved = { ...login("p-ada"), scopeCheck: scopeCheck([]) };
+    await writeLogin(dir, saved);
+    const handler = index.createConnectHandler({ stateDir: dir, currentProfile: () => ({ profileId: "p-ada" }),
+      verify: async () => ({ name: "Ada", scopeCheck: scopeCheck(REQUIRED_SCOPES) }),
+      save: async () => { throw Error("disk full"); },
+    });
+    const initial = response(); await handler(request("GET"), initial);
+    const failed = response();
+    await handler(request("POST", { ticket: ticketOf(initial.body), action, user: "ada@example.com", token: "replacement-token" }), failed);
+    assert.equal(failed.statusCode, 502);
+    assert.doesNotMatch(failed.body, /could not be asked|replacement-token|token-of-p-ada/);
+    assert.match(failed.body, /could not be saved/);
+    assert.match(failed.body, action === "check" ? /Token permissions verified/ : /Required token scopes missing/);
+    assert.deepEqual(await readLogin(dir, "p-ada"), saved);
+  }
+});
+
+test("revoked saved credentials and rate-limited checks are distinct, with the credential retained", async () => {
+  const dir = await stateDir();await writeLogin(dir, { ...login("p-ada"), scopeCheck: scopeCheck(REQUIRED_SCOPES) });
+  let failure = Object.assign(new BitbucketRejected("Credentials rejected."), { credentialsRejected: true });
+  const handler = index.createConnectHandler({ stateDir: dir, currentProfile: () => ({ profileId: "p-ada" }), verify: async () => { throw failure; } });
+  const initial = response();await handler(request("GET"), initial);
+  const rejected = response();await handler(request("POST", { ticket: ticketOf(initial.body), action: "check" }), rejected);
+  assert.match(rejected.body, /Saved login rejected/);
+  assert.equal((await readLogin(dir, "p-ada")).token, "token-of-p-ada");
+  failure = new BitbucketUnavailable("Bitbucket is rate-limiting requests.", 429);
+  const limited = response();await handler(request("POST", { ticket: ticketOf(rejected.body), action: "check" }), limited);
+  assert.equal(limited.statusCode, 429);assert.match(limited.body, /rate-limiting/);
+  assert.equal((await readLogin(dir, "p-ada")).scopeCheck.status, "rejected");
+});
+
 test("the git credential helper answers for bitbucket.org from the login file only", async () => {
   const dir = await stateDir();
-  const file = await writeLogin(dir, login("p"));
+  const file = await writeLogin(dir, { ...login("p"), scopeCheck: scopeCheck(REQUIRED_SCOPES) });
   const helper = path.join(scripts, "git-credential-bitbucket");
   const ask = async (env, host) => {
     const child = run(helper, ["get"], { env: { PATH: process.env.PATH, ...env } });

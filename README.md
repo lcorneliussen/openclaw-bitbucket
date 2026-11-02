@@ -81,9 +81,35 @@ openclaw plugins reload bitbucket
 
 1. A person opens `/plugins/bitbucket/connect` on the gateway's address, or
    the Bitbucket tab in the Control UI, and enters their Atlassian account
-   e-mail and a Bitbucket API token (repositories and pull requests read and
-   write, pipelines read). The gateway checks the token with Bitbucket and
-   stores it under that person's gateway profile.
+   e-mail and a Bitbucket API token. The page links to
+   [Atlassian API tokens](https://id.atlassian.com/manage-profile/security/api-tokens).
+   Choose **Create API token with scopes**, then **Bitbucket**, with:
+
+   - `read:user:bitbucket` (the identity check)
+   - `read:repository:bitbucket` and `write:repository:bitbucket`
+   - `read:pullrequest:bitbucket` and `write:pullrequest:bitbucket`
+   - `read:pipeline:bitbucket`
+
+   These [API-token scopes](https://support.atlassian.com/bitbucket-cloud/docs/api-token-permissions/)
+   are independent: write does not implicitly include read. The creation link
+   opens token management; Bitbucket-specific scope preselection has not been
+   verified, so the page supplies the checklist explicitly.
+
+   The gateway checks identity using one read-only API request. When Bitbucket
+   supplies a usable granted-scope list, missing required scopes are named and
+   the replacement is refused without overwriting an existing login. Without
+   that metadata the page says **Token permissions unverified**, rather than
+   claiming write access was checked. Repository/branch permissions still apply.
+
+   **Check permissions** rechecks the signed-in person's saved token; no token
+   is sent back to the browser or accepted from that form. The timestamped
+   result stays in the owner's private login file. Old login files remain
+   usable and show that permissions have not been checked. Page views do not
+   poll Bitbucket, and simultaneous checks for one person are refused.
+   If the existing login file is unreadable, replacement is refused to preserve
+   it; repair the file or its permissions before reconnecting. If saving a
+   completed check fails, the page shows the fresh result as unsaved, while the
+   previously saved credential and metadata stay unchanged.
 2. Before every `exec`, the gateway asks the plugin for environment. The
    plugin looks up who the session belongs to (the assigned owner, otherwise
    the signed-in person who created it; a spawned session follows its parent)

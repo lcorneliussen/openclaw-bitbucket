@@ -35,7 +35,11 @@ Outside a checkout, pass `--workspace <slug> --repo <slug>`.
 ## Auth
 
 `twg bb` needs a Bitbucket API token (scopes: repositories and pull requests,
-read and write; pipelines read for CI). `git push` over HTTPS uses the same
+read and write; pipelines read for CI; user read for the gateway's identity
+check). The gateway's Bitbucket page links to token creation, lists exact
+scope names and can check the saved login's permissions without a test write.
+If the provider omits granted-scope metadata, permissions remain unverified.
+`git push` over HTTPS uses the same
 token as the password, with the user name `x-bitbucket-api-token-auth`.
 
 Check the environment first:
