@@ -115,7 +115,14 @@ export function createConnectHandler({ stateDir, currentProfile, verify = inspec
     const profile = currentProfile();
     const profileId = profile?.profileId;
     const person = profileId ? profile.displayName || profileId : undefined;
-    const page = async (status, notice) =>
+    const page = async (status, notice, observedCheck) => {
+      let login;
+      try { login = profileId ? await readLogin(stateDir, profileId) : undefined; }
+      catch {
+        log?.warn?.("bitbucket: could not read the saved login");
+        notice ??= { ok: false, text: "The saved login could not be read. Try again later." };
+      }
+      if (login && observedCheck) login = { ...login, scopeCheck: observedCheck };
       send(
         res,
         status,
@@ -123,12 +130,13 @@ export function createConnectHandler({ stateDir, currentProfile, verify = inspec
           nonce,
           path: CONNECT_PATH,
           person,
-          login: profileId ? await readLogin(stateDir, profileId) : undefined,
+          login,
           ticket: profileId ? issueTicket(profileId) : "",
           notice,
         }),
         nonce,
       );
+    };
 
     if (req.method === "GET" || req.method === "HEAD") {
       await page(200);
@@ -159,16 +167,21 @@ export function createConnectHandler({ stateDir, currentProfile, verify = inspec
 
     if (form.get("action") === "disconnect") {
       const check = checks.get(profileId);
-      if (check) check.cancelled = true;
+      if (check) { check.cancelled = true; check.controller?.abort(); }
       const closing = { cancelled: true };
       checks.set(profileId, closing);
       // A completed disconnect must outlast any credential write already
-      // in flight. A pending network read is cancelled without waiting for it.
+      // in flight. Pending network reads are aborted; their results are discarded.
       closing.committing = (async () => {
         await check?.committing?.catch(() => {});
         await removeLogin(stateDir, profileId);
       })();
       try { await closing.committing; }
+      catch {
+        log?.warn?.("bitbucket: could not remove the saved login");
+        await page(502, { ok: false, text: "The saved login could not be removed. Try again later." });
+        return true;
+      }
       finally { if (checks.get(profileId) === closing) checks.delete(profileId); }
       log?.info?.(`bitbucket: removed the login of profile ${profileId}`);
       await page(200, { ok: true, text: "Disconnected. The token is deleted from this gateway." });
@@ -176,7 +189,12 @@ export function createConnectHandler({ stateDir, currentProfile, verify = inspec
     }
 
     const checking = form.get("action") === "check";
-    const existing = await readLogin(stateDir, profileId);
+    let existing;
+    try { existing = await readLogin(stateDir, profileId); }
+    catch {
+      await page(502, { ok: false, text: "The saved login could not be read. Try again later." });
+      return true;
+    }
     if (checking && !existing) {
       await page(400, { ok: false, text: "Connect Bitbucket before checking permissions." });
       return true;
@@ -191,14 +209,14 @@ export function createConnectHandler({ stateDir, currentProfile, verify = inspec
       await page(409, { ok: false, text: "Another Bitbucket login operation is running. Wait for it to finish." });
       return true;
     }
-    const attempt = { cancelled: false };
+    const attempt = { cancelled: false, controller: new AbortController() };
     checks.set(profileId, attempt);
     const unchanged = async () => {
       const current = await readLogin(stateDir, profileId);
       return !attempt.cancelled && current?.token === existing?.token && current?.user === existing?.user && current?.stored === existing?.stored;
     };
     try {
-      const result = await verify(user, token);
+      const result = await verify(user, token, undefined, attempt.controller.signal);
       const { name, scopeCheck: checked } = typeof result === "string" ? { name: result, scopeCheck: scopeCheck() } : result;
       if (!await unchanged()) {
         await page(409, { ok: false, text: "The login changed while checking. Try again." });
@@ -220,19 +238,29 @@ export function createConnectHandler({ stateDir, currentProfile, verify = inspec
       log?.info?.(`bitbucket: stored a login for profile ${profileId}`);
       await page(200, { ok: true, text: checking ? "Permission check completed." : `Connected as ${name}.` });
     } catch (error) {
+      if (attempt.cancelled) {
+        await page(409, { ok: false, text: "The login changed while checking. Try again." });
+        return true;
+      }
       const rejected = error instanceof BitbucketRejected;
-      if (checking && rejected && await unchanged()) {
-        const checked = error.scopeCheck ?? (error.credentialsRejected ? { status: "rejected", checkedAt: new Date().toISOString() } : undefined);
-        if (checked) {
-          attempt.committing = save(stateDir, { ...existing, scopeCheck: checked });
-          await attempt.committing;
+      const checked = checking && rejected ? error.scopeCheck ?? (error.credentialsRejected ? { status: "rejected", checkedAt: new Date().toISOString() } : undefined) : undefined;
+      let recordingFailed = false;
+      if (checked) {
+        try {
+          if (await unchanged()) {
+            attempt.committing = save(stateDir, { ...existing, scopeCheck: checked });
+            await attempt.committing;
+          }
+        } catch {
+          recordingFailed = true;
+          log?.warn?.("bitbucket: could not record the permission-check result");
         }
       }
       if (!rejected) log?.warn?.(`bitbucket: could not store a login: ${error?.message ?? error}`);
       await page(rejected ? 400 : error instanceof BitbucketUnavailable ? error.status : 502, {
         ok: false,
-        text: rejected || error instanceof BitbucketUnavailable ? error.message : "Bitbucket could not be asked just now. Nothing was stored.",
-      });
+        text: (rejected || error instanceof BitbucketUnavailable ? error.message : "Bitbucket could not be asked just now. Nothing was stored.") + (recordingFailed ? " This result could not be saved." : ""),
+      }, checked);
     } finally {
       if (checks.get(profileId) === attempt) checks.delete(profileId);
     }

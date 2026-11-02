@@ -58,6 +58,10 @@ test("missing, malformed, legacy and accepted-scope metadata cannot claim verifi
 test("authentication, access denial and provider failures remain distinct and secret-free", async () => {
   await assert.rejects(inspectToken("a@b.c", "t", response(401)), e => e instanceof BitbucketRejected && e.credentialsRejected);
   await assert.rejects(inspectToken("a@b.c", "t", response(403, {})), e => e instanceof BitbucketRejected && !e.credentialsRejected && /denied access/.test(e.message));
+  for (const value of [null, "denied", []]) {
+    await assert.rejects(inspectToken("a@b.c", "t", response(403, value)), e => e instanceof BitbucketRejected && e.scopeCheck.status === "unknown");
+  }
+  await assert.rejects(inspectToken("a@b.c", "t", async () => new Response("<html>Denied</html>", { status: 403 })), e => e instanceof BitbucketRejected && e.scopeCheck.status === "unknown");
   for (const status of [429, 500]) {
     let calls = 0;
     await assert.rejects(inspectToken("a@b.c", "t", async () => { calls++; return response(status)(); }), BitbucketUnavailable);
@@ -65,6 +69,15 @@ test("authentication, access denial and provider failures remain distinct and se
   }
   await assert.rejects(inspectToken("a@b.c", "test-token", async () => { throw Error("test-token"); }), e => !e.message.includes("test-token"));
   await assert.rejects(inspectToken("a@b.c", "t", response(200, null)), BitbucketUnavailable);
+});
+
+test("an owner cancellation aborts the bounded identity request", async () => {
+  const controller = new AbortController();let started;
+  const ready = new Promise(resolve => { started = resolve; });
+  const request = inspectToken("a@b.c", "t", async (_url, options) => {
+    started();return new Promise((_resolve, reject) => options.signal.addEventListener("abort", () => reject(Error("aborted")), { once: true }));
+  }, controller.signal);
+  await ready;controller.abort();await assert.rejects(request, BitbucketUnavailable);
 });
 
 test("the creation guide names exactly the six scopes and separates unknown from verified", () => {

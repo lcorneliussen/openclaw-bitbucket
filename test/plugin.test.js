@@ -304,6 +304,32 @@ test("disconnect waits for an already-started credential write and removes its r
   assert.equal(disconnected.statusCode, 200);assert.equal(connecting.statusCode, 409);assert.equal(await readLogin(dir, "p-ada"), undefined);
 });
 
+test("disconnect aborts the saved-login network check without waiting for its timeout", async () => {
+  const dir = await stateDir();await writeLogin(dir, login("p-ada"));let started, signal;
+  const ready = new Promise(resolve => { started = resolve; });
+  const handler = index.createConnectHandler({ stateDir: dir, currentProfile: () => ({ profileId: "p-ada" }), verify: async (_user, _token, _fetch, cancellation) => {
+    signal = cancellation;started();return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new BitbucketUnavailable("Cancelled read.")), { once: true }));
+  } });
+  const a = response(), b = response();await handler(request("GET"), a);await handler(request("GET"), b);
+  const checked = response();const pending = handler(request("POST", { ticket: ticketOf(a.body), action: "check" }), checked);await ready;
+  const disconnected = response();await handler(request("POST", { ticket: ticketOf(b.body), action: "disconnect" }), disconnected);await pending;
+  assert.equal(signal.aborted, true);assert.equal(disconnected.statusCode, 200);assert.equal(checked.statusCode, 409);assert.equal(await readLogin(dir, "p-ada"), undefined);
+});
+
+test("a denial clears a verified badge even when its metadata cannot be saved", async () => {
+  for (const fails of [false, true]) {
+    const dir = await stateDir();await writeLogin(dir, { ...login("p-ada"), scopeCheck: scopeCheck(REQUIRED_SCOPES) });
+    const failure = Object.assign(new BitbucketRejected("Access denied."), { scopeCheck: scopeCheck() });
+    const handler = index.createConnectHandler({ stateDir: dir, currentProfile: () => ({ profileId: "p-ada" }), verify: async () => { throw failure; }, save: fails ? async () => { throw Error("disk full"); } : writeLogin });
+    const initial = response();await handler(request("GET"), initial);
+    const res = response();await handler(request("POST", { ticket: ticketOf(initial.body), action: "check" }), res);
+    assert.equal(res.statusCode, 400);assert.match(res.body, /Access denied/);assert.match(res.body, /Token permissions unverified/);assert.doesNotMatch(res.body, /Token permissions verified/);
+    if (fails) assert.match(res.body, /result could not be saved/);
+    assert.equal((await readLogin(dir, "p-ada")).scopeCheck.status, fails ? "verified" : "unknown");
+    assert.equal((await readLogin(dir, "p-ada")).token, "token-of-p-ada");
+  }
+});
+
 test("revoked saved credentials and rate-limited checks are distinct, with the credential retained", async () => {
   const dir = await stateDir();await writeLogin(dir, { ...login("p-ada"), scopeCheck: scopeCheck(REQUIRED_SCOPES) });
   let failure = Object.assign(new BitbucketRejected("Credentials rejected."), { credentialsRejected: true });
@@ -320,7 +346,7 @@ test("revoked saved credentials and rate-limited checks are distinct, with the c
 
 test("the git credential helper answers for bitbucket.org from the login file only", async () => {
   const dir = await stateDir();
-  const file = await writeLogin(dir, login("p"));
+  const file = await writeLogin(dir, { ...login("p"), scopeCheck: scopeCheck(REQUIRED_SCOPES) });
   const helper = path.join(scripts, "git-credential-bitbucket");
   const ask = async (env, host) => {
     const child = run(helper, ["get"], { env: { PATH: process.env.PATH, ...env } });
