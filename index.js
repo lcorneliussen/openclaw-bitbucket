@@ -79,7 +79,7 @@ async function readForm(req) {
 
 // The page and its form. `tickets` ties a form to the person it was rendered
 // for, so a request forged from another site cannot store or delete a login.
-export function createConnectHandler({ stateDir, currentProfile, verify = inspectToken, log }) {
+export function createConnectHandler({ stateDir, currentProfile, verify = inspectToken, save = writeLogin, log }) {
   const tickets = new Map();
   const checks = new Map();
 
@@ -160,7 +160,16 @@ export function createConnectHandler({ stateDir, currentProfile, verify = inspec
     if (form.get("action") === "disconnect") {
       const check = checks.get(profileId);
       if (check) check.cancelled = true;
-      await removeLogin(stateDir, profileId);
+      const closing = { cancelled: true };
+      checks.set(profileId, closing);
+      // A completed disconnect must outlast any credential write already
+      // in flight. A pending network read is cancelled without waiting for it.
+      closing.committing = (async () => {
+        await check?.committing?.catch(() => {});
+        await removeLogin(stateDir, profileId);
+      })();
+      try { await closing.committing; }
+      finally { if (checks.get(profileId) === closing) checks.delete(profileId); }
       log?.info?.(`bitbucket: removed the login of profile ${profileId}`);
       await page(200, { ok: true, text: "Disconnected. The token is deleted from this gateway." });
       return true;
@@ -179,7 +188,7 @@ export function createConnectHandler({ stateDir, currentProfile, verify = inspec
       return true;
     }
     if (checks.has(profileId)) {
-      await page(409, { ok: false, text: "A Bitbucket check is already running. Wait for it to finish." });
+      await page(409, { ok: false, text: "Another Bitbucket login operation is running. Wait for it to finish." });
       return true;
     }
     const attempt = { cancelled: false };
@@ -195,7 +204,7 @@ export function createConnectHandler({ stateDir, currentProfile, verify = inspec
         await page(409, { ok: false, text: "The login changed while checking. Try again." });
         return true;
       }
-      await writeLogin(stateDir, {
+      attempt.committing = save(stateDir, {
         profile: profileId,
         user,
         name,
@@ -203,13 +212,21 @@ export function createConnectHandler({ stateDir, currentProfile, verify = inspec
         stored: checking ? existing.stored : new Date().toISOString(),
         scopeCheck: checked,
       });
+      await attempt.committing;
+      if (attempt.cancelled) {
+        await page(409, { ok: false, text: "The login changed while checking. Try again." });
+        return true;
+      }
       log?.info?.(`bitbucket: stored a login for profile ${profileId}`);
       await page(200, { ok: true, text: checking ? "Permission check completed." : `Connected as ${name}.` });
     } catch (error) {
       const rejected = error instanceof BitbucketRejected;
       if (checking && rejected && await unchanged()) {
         const checked = error.scopeCheck ?? (error.credentialsRejected ? { status: "rejected", checkedAt: new Date().toISOString() } : undefined);
-        if (checked) await writeLogin(stateDir, { ...existing, scopeCheck: checked });
+        if (checked) {
+          attempt.committing = save(stateDir, { ...existing, scopeCheck: checked });
+          await attempt.committing;
+        }
       }
       if (!rejected) log?.warn?.(`bitbucket: could not store a login: ${error?.message ?? error}`);
       await page(rejected ? 400 : error instanceof BitbucketUnavailable ? error.status : 502, {
@@ -217,7 +234,7 @@ export function createConnectHandler({ stateDir, currentProfile, verify = inspec
         text: rejected || error instanceof BitbucketUnavailable ? error.message : "Bitbucket could not be asked just now. Nothing was stored.",
       });
     } finally {
-      checks.delete(profileId);
+      if (checks.get(profileId) === attempt) checks.delete(profileId);
     }
     return true;
   };

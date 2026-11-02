@@ -286,6 +286,24 @@ test("a concurrent check is refused and disconnect cannot be undone by its late 
   assert.equal(await readLogin(dir, "p-ada"), undefined);
 });
 
+test("disconnect waits for an already-started credential write and removes its result", async () => {
+  const dir = await stateDir();
+  let finishWrite, writing;
+  const started = new Promise(resolve => { writing = resolve; });
+  const handler = index.createConnectHandler({ stateDir: dir, currentProfile: () => ({ profileId: "p-ada" }),
+    verify: async () => ({ name: "Ada", scopeCheck: scopeCheck(REQUIRED_SCOPES) }),
+    save: async (...args) => { writing();await new Promise(resolve => { finishWrite = resolve; });return writeLogin(...args); },
+  });
+  const a = response(), b = response();await handler(request("GET"), a);await handler(request("GET"), b);
+  const connecting = response();
+  const pending = handler(request("POST", { ticket: ticketOf(a.body), action: "connect", user: "ada@example.com", token: "new-token" }), connecting);
+  await started;
+  const disconnected = response();const closing = handler(request("POST", { ticket: ticketOf(b.body), action: "disconnect" }), disconnected);
+  await new Promise(resolve => setImmediate(resolve));assert.equal(disconnected.statusCode, 0, "disconnect must finish after the write");
+  finishWrite();await Promise.all([pending, closing]);
+  assert.equal(disconnected.statusCode, 200);assert.equal(connecting.statusCode, 409);assert.equal(await readLogin(dir, "p-ada"), undefined);
+});
+
 test("revoked saved credentials and rate-limited checks are distinct, with the credential retained", async () => {
   const dir = await stateDir();await writeLogin(dir, { ...login("p-ada"), scopeCheck: scopeCheck(REQUIRED_SCOPES) });
   let failure = Object.assign(new BitbucketRejected("Credentials rejected."), { credentialsRejected: true });
