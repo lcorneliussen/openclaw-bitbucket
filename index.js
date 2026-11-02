@@ -7,7 +7,8 @@
 import { randomBytes } from "node:crypto";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
-import { BitbucketRejected, verifyToken } from "./lib/bitbucket.js";
+import { BitbucketRejected, BitbucketUnavailable, inspectToken } from "./lib/bitbucket.js";
+import { scopeCheck } from "./lib/scopes.js";
 import { loginFile, readLogin, removeLogin, writeLogin } from "./lib/logins.js";
 import { renderPage } from "./lib/page.js";
 import { createPublisher } from "./lib/publish.js";
@@ -78,8 +79,9 @@ async function readForm(req) {
 
 // The page and its form. `tickets` ties a form to the person it was rendered
 // for, so a request forged from another site cannot store or delete a login.
-export function createConnectHandler({ stateDir, currentProfile, verify = verifyToken, log }) {
+export function createConnectHandler({ stateDir, currentProfile, verify = inspectToken, log }) {
   const tickets = new Map();
+  const checks = new Map();
 
   const issueTicket = (profileId) => {
     const now = Date.now();
@@ -156,36 +158,66 @@ export function createConnectHandler({ stateDir, currentProfile, verify = verify
     }
 
     if (form.get("action") === "disconnect") {
+      const check = checks.get(profileId);
+      if (check) check.cancelled = true;
       await removeLogin(stateDir, profileId);
       log?.info?.(`bitbucket: removed the login of profile ${profileId}`);
       await page(200, { ok: true, text: "Disconnected. The token is deleted from this gateway." });
       return true;
     }
 
-    const user = (form.get("user") ?? "").trim();
-    const token = (form.get("token") ?? "").trim();
+    const checking = form.get("action") === "check";
+    const existing = await readLogin(stateDir, profileId);
+    if (checking && !existing) {
+      await page(400, { ok: false, text: "Connect Bitbucket before checking permissions." });
+      return true;
+    }
+    const user = checking ? existing.user : (form.get("user") ?? "").trim();
+    const token = checking ? existing.token : (form.get("token") ?? "").trim();
     if (!/^[^\s@]+@[^\s@]+$/.test(user) || !token || /\s/.test(token)) {
       await page(400, { ok: false, text: "Enter the account e-mail and the API token." });
       return true;
     }
+    if (checks.has(profileId)) {
+      await page(409, { ok: false, text: "A Bitbucket check is already running. Wait for it to finish." });
+      return true;
+    }
+    const attempt = { cancelled: false };
+    checks.set(profileId, attempt);
+    const unchanged = async () => {
+      const current = await readLogin(stateDir, profileId);
+      return !attempt.cancelled && current?.token === existing?.token && current?.user === existing?.user && current?.stored === existing?.stored;
+    };
     try {
-      const name = await verify(user, token);
+      const result = await verify(user, token);
+      const { name, scopeCheck: checked } = typeof result === "string" ? { name: result, scopeCheck: scopeCheck() } : result;
+      if (!await unchanged()) {
+        await page(409, { ok: false, text: "The login changed while checking. Try again." });
+        return true;
+      }
       await writeLogin(stateDir, {
         profile: profileId,
         user,
         name,
         token,
-        stored: new Date().toISOString(),
+        stored: checking ? existing.stored : new Date().toISOString(),
+        scopeCheck: checked,
       });
       log?.info?.(`bitbucket: stored a login for profile ${profileId}`);
-      await page(200, { ok: true, text: `Connected as ${name}.` });
+      await page(200, { ok: true, text: checking ? "Permission check completed." : `Connected as ${name}.` });
     } catch (error) {
       const rejected = error instanceof BitbucketRejected;
+      if (checking && rejected && await unchanged()) {
+        const checked = error.scopeCheck ?? (error.credentialsRejected ? { status: "rejected", checkedAt: new Date().toISOString() } : undefined);
+        if (checked) await writeLogin(stateDir, { ...existing, scopeCheck: checked });
+      }
       if (!rejected) log?.warn?.(`bitbucket: could not store a login: ${error?.message ?? error}`);
-      await page(rejected ? 400 : 502, {
+      await page(rejected ? 400 : error instanceof BitbucketUnavailable ? error.status : 502, {
         ok: false,
-        text: rejected ? error.message : "Bitbucket could not be asked just now. Nothing was stored.",
+        text: rejected || error instanceof BitbucketUnavailable ? error.message : "Bitbucket could not be asked just now. Nothing was stored.",
       });
+    } finally {
+      checks.delete(profileId);
     }
     return true;
   };
