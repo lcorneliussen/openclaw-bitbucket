@@ -34,6 +34,11 @@ Bitbucket Cloud for [OpenClaw](https://docs.openclaw.ai), in two parts:
 - for personal logins: a gateway sign-in that identifies each person, such as
   trusted-proxy auth. With a shared token the gateway cannot tell people apart.
 
+Session-owner reads use the asynchronous SDK on newer hosts. The declared
+2026.10.2 minimum remains supported by selecting its legacy method only when
+the async method is absent. A failed async read never retries through the
+legacy API; execution receives no login if its owner cannot be resolved.
+
 ## Install
 
 Pin a tag; a plugin runs inside the gateway and a skill is instructions an

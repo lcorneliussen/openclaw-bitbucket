@@ -613,3 +613,42 @@ test("unreadable confirmation pages do not claim a successful credential save wa
     assert.equal(persisted.scopeCheck.status, "verified");
   }
 });
+
+for (const host of ["legacy", "async-only", "both", "async-failure"]) test(`exec owner resolution uses supported session reader on ${host} hosts`, async () => {
+  const dir = await stateDir();
+  await writeLogin(dir, login("p-owner"));
+  const hooks = new Map(), calls = [];
+  let legacyCalls = 0;
+  const read = ({ agentId, sessionKey }) => {
+    assert.equal(agentId, "main"); calls.push(sessionKey);
+    return sessionKey === "child" ? { parentSessionKey: "parent" }
+      : { owner: { actor: { type: "human", id: "p-owner" } } };
+  };
+  const sessions = host === "async-only" ? {} : { getSessionEntry: read };
+  if (host !== "legacy") {
+    sessions.getSessionEntryAsync = async (params) => {
+      await new Promise(setImmediate);
+      if (host === "async-failure") throw new Error("session store unavailable");
+      return read(params);
+    };
+    if (host !== "async-only") sessions.getSessionEntry = () => { legacyCalls++; throw new Error("deprecated read must not be used"); };
+  }
+  const warnings = [];
+  index.default.register({
+    pluginConfig: {}, logger: { warn: message => warnings.push(message) },
+    runtime: { state: { resolveStateDir: () => dir }, agent: { session: sessions } },
+    on: (name, handler) => hooks.set(name, handler), registerHttpRoute() {},
+    session: { controls: { registerSessionAction() {}, registerControlUiDescriptor() {} } },
+  });
+  const env = await hooks.get("resolve_exec_env")({ sessionKey: "child", host: "gateway" }, { agentId: "main" });
+  assert.equal(legacyCalls, 0);
+  if (host === "async-failure") {
+    assert.equal(env.BITBUCKET_LOGIN_FILE, "");
+    assert.equal(warnings.length, 1);
+    assert.deepEqual(calls, []);
+  } else {
+    assert.equal(env.BITBUCKET_LOGIN_FILE, loginFile(dir, "p-owner"));
+    assert.deepEqual(calls, ["child", "parent"]);
+    assert.deepEqual(warnings, []);
+  }
+});

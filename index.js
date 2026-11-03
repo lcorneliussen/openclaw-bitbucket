@@ -303,7 +303,11 @@ export default definePluginEntry({
   register(api) {
     const config = api.pluginConfig ?? {};
     const stateDir = api.runtime.state.resolveStateDir(process.env);
-    const getSessionEntry = (params) => api.runtime.agent.session.getSessionEntry(params);
+    // Keep older hosts supported, but never retry a failed async read
+    // through the deprecated method.
+    const sessions = api.runtime.agent.session;
+    const getSessionEntry = async (params) => typeof sessions.getSessionEntryAsync === "function"
+      ? sessions.getSessionEntryAsync(params) : sessions.getSessionEntry(params);
     const log = api.logger;
 
     api.on("resolve_exec_env", async (event, ctx) => {
