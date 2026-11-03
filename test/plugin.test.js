@@ -387,6 +387,105 @@ test("a denial clears a verified badge even when its metadata cannot be saved", 
   }
 });
 
+test("a denied check interrupted during its comparison cannot relabel a replacement login", async () => {
+  const dir = await stateDir(); await writeLogin(dir, login("p-ada"));
+  let pauseNext = false, reached, release;
+  const waiting = new Promise(resolve => { reached = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const handler = index.createConnectHandler({ stateDir: dir, currentProfile: () => ({ profileId: "p-ada" }),
+    load: async (...args) => { if (pauseNext) { pauseNext = false; reached(); await gate; } return readLogin(...args); },
+    verify: async (_user, token) => {
+      if (token === "token-of-p-ada") { pauseNext = true; throw new BitbucketScopesMissing([]); }
+      return { name: "Grace", scopeCheck: scopeCheck(REQUIRED_SCOPES) };
+    },
+  });
+  const initial = response(), other = response();
+  await handler(request("GET"), initial); await handler(request("GET"), other);
+  const checked = response();
+  const pending = handler(request("POST", { ticket: ticketOf(initial.body), action: "check" }), checked);
+  await waiting;
+  const disconnected = response();
+  await handler(request("POST", { ticket: ticketOf(other.body), action: "disconnect" }), disconnected);
+  await handler(request("POST", { ticket: ticketOf(disconnected.body), action: "connect", user: "grace@example.com", token: "replacement-token" }), response());
+  release(); await pending;
+  assert.equal(checked.statusCode, 409);
+  assert.match(checked.body, /login changed while checking/);
+  assert.doesNotMatch(checked.body, /Required token scopes missing|Token is missing required scopes/);
+  assert.equal((await readLogin(dir, "p-ada")).scopeCheck.status, "verified");
+});
+
+test("a fresh page reload never applies an old observed result to a replacement credential", async () => {
+  for (const disconnect of [false, true]) {
+    const dir = await stateDir(); await writeLogin(dir, login("p-ada"));
+    let pauseNext = false, reached, release;
+    const waiting = new Promise(resolve => { reached = resolve; });
+    const gate = new Promise(resolve => { release = resolve; });
+    const handler = index.createConnectHandler({ stateDir: dir, currentProfile: () => ({ profileId: "p-ada" }),
+      load: async (...args) => { if (pauseNext) { pauseNext = false; reached(); await gate; } return readLogin(...args); },
+      verify: async () => { throw new BitbucketScopesMissing([]); },
+      save: async () => { pauseNext = true; throw Error("disk full"); },
+    });
+    const initial = response(), other = response();
+    await handler(request("GET"), initial); await handler(request("GET"), other);
+    const checked = response();
+    const pending = handler(request("POST", { ticket: ticketOf(initial.body), action: "check" }), checked);
+    await waiting;
+    if (disconnect) await handler(request("POST", { ticket: ticketOf(other.body), action: "disconnect" }), response());
+    const replacement = { ...login("p-ada", "grace@example.com"), token: "replacement-token", stored: "2026-02-03T04:05:06.000Z", scopeCheck: scopeCheck(REQUIRED_SCOPES) };
+    await writeLogin(dir, replacement);
+    release(); await pending;
+    assert.equal(checked.statusCode, 409);
+    assert.match(checked.body, /login changed while checking/);
+    assert.match(checked.body, /Token permissions verified/);
+    assert.doesNotMatch(checked.body, /Required token scopes missing|Token is missing required scopes/);
+    assert.deepEqual(await readLogin(dir, "p-ada"), replacement);
+  }
+});
+
+test("disconnect during a denied-check metadata write returns a changed-login response", async () => {
+  const dir = await stateDir(); await writeLogin(dir, login("p-ada"));
+  let reached, release;
+  const writing = new Promise(resolve => { reached = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const handler = index.createConnectHandler({ stateDir: dir, currentProfile: () => ({ profileId: "p-ada" }),
+    verify: async () => { throw new BitbucketScopesMissing([]); },
+    save: async (...args) => { reached(); await gate; return writeLogin(...args); },
+  });
+  const initial = response(), other = response();
+  await handler(request("GET"), initial); await handler(request("GET"), other);
+  const checked = response();
+  const pending = handler(request("POST", { ticket: ticketOf(initial.body), action: "check" }), checked);
+  await writing;
+  const disconnected = response();
+  const closing = handler(request("POST", { ticket: ticketOf(other.body), action: "disconnect" }), disconnected);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(disconnected.statusCode, 0);
+  release(); await Promise.all([pending, closing]);
+  assert.equal(checked.statusCode, 409);
+  assert.match(checked.body, /login changed while checking/);
+  assert.equal(disconnected.statusCode, 200);
+  assert.equal(await readLogin(dir, "p-ada"), undefined);
+});
+
+test("unreadable saved logins show repair guidance and preserve the credential without offering forms", async () => {
+  const dir = await stateDir(); const saved = login("p-ada"); await writeLogin(dir, saved);
+  let broken = false, calls = 0;
+  const handler = index.createConnectHandler({ stateDir: dir, currentProfile: () => ({ profileId: "p-ada" }),
+    load: async (...args) => { if (broken) throw Error("private diagnostic"); return readLogin(...args); },
+    verify: async () => { calls++; return "Ada"; },
+  });
+  const initial = response(); await handler(request("GET"), initial); broken = true;
+  for (const req of [request("GET"), request("POST", { ticket: ticketOf(initial.body), action: "check" })]) {
+    const failed = response(); await handler(req, failed);
+    assert.equal(failed.statusCode, 502);
+    assert.match(failed.body, /Saved login unreadable/);
+    assert.match(failed.body, /gateway operator/);
+    assert.doesNotMatch(failed.body, /Not connected|Try again later|<form|private diagnostic|token-of-p-ada/);
+  }
+  assert.equal(calls, 0);
+  assert.deepEqual(await readLogin(dir, "p-ada"), saved);
+});
+
 test("a successful read with a failed save reports a local error and preserves the saved login", async () => {
   for (const action of ["check", "connect"]) {
     const dir = await stateDir();
@@ -465,5 +564,52 @@ test("the publish actions are registered, and need a signed-in person", async ()
     const res = await actions.get(id).handler({ sessionKey: "s", agentId: "main", payload: { requestId: "r", requestDigest: "d" } });
     assert.equal(res.ok, false);
     assert.match(res.error, /sign in as a person/);
+  }
+});
+
+test("successful operations reject contested post-save reloads", async () => {
+  for (const action of ["connect", "check"]) for (const disconnect of [false, true]) {
+    const dir = await stateDir(); await writeLogin(dir, login("p-ada"));
+    let pauseNext = false, reached, release;
+    const waiting = new Promise(r => { reached = r; });
+    const gate = new Promise(r => { release = r; });
+    const handler = index.createConnectHandler({ stateDir: dir, currentProfile: () => ({ profileId: "p-ada" }),
+      load: async (...args) => { if (pauseNext) { pauseNext = false; reached(); await gate; } return readLogin(...args); },
+      verify: async () => ({ name: "Ada", scopeCheck: scopeCheck(REQUIRED_SCOPES) }),
+      save: async (...args) => { await writeLogin(...args); pauseNext = true; },
+    });
+    const initial = response(), other = response();
+    await handler(request("GET"), initial); await handler(request("GET"), other);
+    const checked = response();
+    const pending = handler(request("POST", { ticket: ticketOf(initial.body), action, user: "ada@example.com", token: "new-token" }), checked);
+    await waiting;
+    if (disconnect) await handler(request("POST", { ticket: ticketOf(other.body), action: "disconnect" }), response());
+    const replacement = { ...login("p-ada", "grace@example.com"), token: "replacement-token", stored: "2026-03-04T05:06:07.000Z", scopeCheck: scopeCheck([]) };
+    await writeLogin(dir, replacement); release(); await pending;
+    assert.equal(checked.statusCode, 409);
+    assert.match(checked.body, /login changed while checking/);
+    assert.doesNotMatch(checked.body, /Token permissions verified|Permission check completed/);
+    assert.deepEqual(await readLogin(dir, "p-ada"), replacement);
+  }
+});
+
+test("unreadable confirmation pages do not claim a successful credential save was undone", async () => {
+  for (const action of ["connect", "check"]) {
+    const dir = await stateDir(); await writeLogin(dir, login("p-ada"));
+    let unreadable = false;
+    const handler = index.createConnectHandler({ stateDir: dir, currentProfile: () => ({ profileId: "p-ada" }),
+      load: async (...args) => { if (unreadable) throw Error("private diagnostic"); return readLogin(...args); },
+      verify: async () => ({ name: "Ada", scopeCheck: scopeCheck(REQUIRED_SCOPES) }),
+      save: async (...args) => { await writeLogin(...args); unreadable = true; },
+    });
+    const initial = response(); await handler(request("GET"), initial);
+    const saved = response();
+    await handler(request("POST", { ticket: ticketOf(initial.body), action, user: "ada@example.com", token: "replacement-token" }), saved);
+    assert.equal(saved.statusCode, 502);
+    assert.match(saved.body, /Saved login unreadable/);
+    assert.doesNotMatch(saved.body, /has not been replaced|Not connected|private diagnostic|replacement-token/);
+    const persisted = await readLogin(dir, "p-ada");
+    assert.equal(persisted.token, action === "connect" ? "replacement-token" : "token-of-p-ada");
+    assert.equal(persisted.scopeCheck.status, "verified");
   }
 });

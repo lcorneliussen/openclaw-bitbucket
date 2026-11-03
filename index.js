@@ -82,6 +82,8 @@ async function readForm(req) {
 export function createConnectHandler({ stateDir, currentProfile, verify = inspectToken, load = readLogin, save = writeLogin, log }) {
   const tickets = new Map();
   const checks = new Map();
+  const sameLogin = (a, b) => a?.token === b?.token && a?.user === b?.user && a?.stored === b?.stored;
+  const changedLogin = { ok: false, text: "The login changed while checking. Try again." };
 
   const issueTicket = (profileId) => {
     const now = Date.now();
@@ -115,14 +117,21 @@ export function createConnectHandler({ stateDir, currentProfile, verify = inspec
     const profile = currentProfile();
     const profileId = profile?.profileId;
     const person = profileId ? profile.displayName || profileId : undefined;
-    const page = async (status, notice, observedCheck) => {
-      let login;
+    const page = async (status, notice, observation) => {
+      let login, loginUnreadable = false;
       try { login = profileId ? await load(stateDir, profileId) : undefined; }
       catch {
         log?.warn?.("bitbucket: could not read the saved login");
-        notice ??= { ok: false, text: "The saved login could not be read. Try again later." };
+        loginUnreadable = true;
+        if (status === 200) status = 502;
       }
-      if (login && observedCheck) login = { ...login, scopeCheck: observedCheck };
+      // A page reload can itself outlast Disconnect or credential replacement.
+      if (observation?.attempt.cancelled || (observation && !loginUnreadable && !sameLogin(login, observation.login))) {
+        status = 409;
+        notice = changedLogin;
+      } else if (login && observation) {
+        login = { ...login, scopeCheck: observation.check };
+      }
       send(
         res,
         status,
@@ -131,6 +140,7 @@ export function createConnectHandler({ stateDir, currentProfile, verify = inspec
           path: CONNECT_PATH,
           person,
           login,
+          loginUnreadable,
           ticket: profileId ? issueTicket(profileId) : "",
           notice,
         }),
@@ -194,17 +204,17 @@ export function createConnectHandler({ stateDir, currentProfile, verify = inspec
       return true;
     }
     const attempt = { cancelled: false, controller: new AbortController() };
-    // Register before the first file read so Disconnect can cancel that wait too.
+    // Register before reading so Disconnect can invalidate the waiting attempt.
     checks.set(profileId, attempt);
     let existing, observed;
     const unchanged = async () => {
       const current = await load(stateDir, profileId);
-      return !attempt.cancelled && current?.token === existing?.token && current?.user === existing?.user && current?.stored === existing?.stored;
+      return !attempt.cancelled && sameLogin(current, existing);
     };
     try {
       try { existing = await load(stateDir, profileId); }
       catch {
-        await page(502, { ok: false, text: "The saved login could not be read. Try again later." });
+        await page(502, { ok: false, text: "The saved login could not be read; no changes were made." });
         return true;
       }
       if (attempt.cancelled) {
@@ -228,21 +238,22 @@ export function createConnectHandler({ stateDir, currentProfile, verify = inspec
         await page(409, { ok: false, text: "The login changed while checking. Try again." });
         return true;
       }
-      attempt.committing = save(stateDir, {
+      const connected = {
         profile: profileId,
         user,
         name,
         token,
         stored: checking ? existing.stored : new Date().toISOString(),
         scopeCheck: checked,
-      });
+      };
+      attempt.committing = save(stateDir, connected);
       await attempt.committing;
       if (attempt.cancelled) {
         await page(409, { ok: false, text: "The login changed while checking. Try again." });
         return true;
       }
       log?.info?.(`bitbucket: stored a login for profile ${profileId}`);
-      await page(200, { ok: true, text: checking ? "Permission check completed." : `Connected as ${name}.` });
+      await page(200, { ok: true, text: checking ? "Permission check completed." : `Connected as ${name}.` }, { login: connected, check: checked, attempt });
     } catch (error) {
       if (attempt.cancelled) {
         await page(409, { ok: false, text: "The login changed while checking. Try again." });
@@ -250,7 +261,7 @@ export function createConnectHandler({ stateDir, currentProfile, verify = inspec
       }
       if (observed) {
         log?.warn?.("bitbucket: could not save the login or permission-check result");
-        await page(502, { ok: false, text: checking ? "Permission check completed, but its result could not be saved." : "The Bitbucket login could not be saved. Any previous login was kept." }, checking ? observed : undefined);
+        await page(502, { ok: false, text: checking ? "Permission check completed, but its result could not be saved." : "The Bitbucket login could not be saved. Any previous login was kept." }, checking ? { login: existing, check: observed, attempt } : undefined);
         return true;
       }
       const rejected = error instanceof BitbucketRejected;
@@ -258,20 +269,26 @@ export function createConnectHandler({ stateDir, currentProfile, verify = inspec
       let recordingFailed = false;
       if (checked) {
         try {
-          if (await unchanged() && !attempt.cancelled) {
-            attempt.committing = save(stateDir, { ...existing, scopeCheck: checked });
-            await attempt.committing;
+          if (!await unchanged() || attempt.cancelled) {
+            await page(409, changedLogin);
+            return true;
           }
+          attempt.committing = save(stateDir, { ...existing, scopeCheck: checked });
+          await attempt.committing;
         } catch {
           recordingFailed = true;
           log?.warn?.("bitbucket: could not record the permission-check result");
         }
       }
+      if (attempt.cancelled) {
+        await page(409, changedLogin);
+        return true;
+      }
       if (!rejected) log?.warn?.(`bitbucket: could not store a login: ${error?.message ?? error}`);
       await page(rejected ? 400 : error instanceof BitbucketUnavailable ? error.status : 502, {
         ok: false,
         text: (rejected || error instanceof BitbucketUnavailable ? error.message : "Bitbucket could not be asked just now. Nothing was stored.") + (recordingFailed ? " This result could not be saved." : ""),
-      }, checked);
+      }, checked ? { login: existing, check: checked, attempt } : undefined);
     } finally {
       if (checks.get(profileId) === attempt) checks.delete(profileId);
     }

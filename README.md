@@ -40,7 +40,7 @@ Pin a tag; a plugin runs inside the gateway and a skill is instructions an
 agent will follow.
 
 ```bash
-openclaw plugins install git:github.com/lcorneliussen/openclaw-bitbucket@v0.3.4 --accept-capabilities
+openclaw plugins install git:github.com/lcorneliussen/openclaw-bitbucket@v0.3.5 --accept-capabilities
 ```
 
 The plugin brings the skill with it. `openclaw plugins reload bitbucket` loads
@@ -110,6 +110,9 @@ openclaw plugins reload bitbucket
    it; repair the file or its permissions before reconnecting. If saving a
    completed check fails, the page shows the fresh result as unsaved, while the
    previously saved credential and metadata stay unchanged.
+   A check interrupted by Disconnect or credential replacement cannot attach
+   its result to the replacement login. An unreadable saved login is shown as
+   such, with operator-repair guidance instead of a new connection form.
 2. Before every `exec`, the gateway asks the plugin for environment. The
    plugin looks up who the session belongs to (the assigned owner, otherwise
    the signed-in person who created it; a spawned session follows its parent)
