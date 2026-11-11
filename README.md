@@ -116,15 +116,16 @@ openclaw plugins reload bitbucket
    The gateway checks identity using one read-only API request. When Bitbucket
    supplies a usable granted-scope list, missing required scopes are named and
    the replacement is refused without overwriting an existing login. Without
-   that metadata the page says **Permissions unverified**, rather than
+   that metadata the page says **Scopes unknown**, rather than
    claiming write access was checked. Repository/branch permissions still apply.
 
    **Check again** rechecks the signed-in person's saved token; no token
    is sent back to the browser or accepted from that form. The timestamped
    result stays in the owner's private login file. Old login files remain
-   usable and show that permissions have not been checked. The opening check
-   does not poll Bitbucket, and simultaneous checks for one person are refused. A failed current check is shown as needing attention,
-   even when an older saved check had verified all scopes.
+   usable. Read-only viewers without recorded scope data see Unknown rows;
+   writers run the opening check. There is no polling, and simultaneous checks
+   for one person are refused. A failed current check is shown as needing
+   attention, even when an older saved check had verified all scopes.
    If the existing login file is unreadable, replacement is refused to preserve
    it; repair the file or its permissions before reconnecting. If saving a
    completed check fails, the page shows the fresh result as unsaved, while the
