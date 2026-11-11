@@ -1,5 +1,6 @@
 {
   "id": "bitbucket",
+  "version": "0.3.6",
   "name": "Bitbucket",
   "description": "Bitbucket Cloud skill and personal Bitbucket logins: each signed-in person connects their own account, and commands in their sessions use it.",
   "activation": {
