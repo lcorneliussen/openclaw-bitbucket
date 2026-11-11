@@ -45,7 +45,7 @@ Pin a tag; a plugin runs inside the gateway and a skill is instructions an
 agent will follow.
 
 ```bash
-openclaw plugins install git:github.com/lcorneliussen/openclaw-bitbucket@v0.3.5 --accept-capabilities
+openclaw plugins install git:github.com/lcorneliussen/openclaw-bitbucket@v0.3.6 --accept-capabilities
 ```
 
 The plugin brings the skill with it. `openclaw plugins reload bitbucket` loads
@@ -74,13 +74,21 @@ with `openclaw skills install`.
 
 ### Upgrade
 
-Install the new tag over the old one and reload it. People's logins and the
-plugin's configuration stay as they are.
+Install the new tag over the old one. Keep the plugin ID `bitbucket`: existing
+personal logins and plugin settings are reused, without entering tokens again.
+The upgrade preserves enablement, allowlists and denylists with `--no-enable`.
+For an enabled installation, reload after installing:
 
 ```bash
-openclaw plugins install git:github.com/lcorneliussen/openclaw-bitbucket@<tag> --force --accept-capabilities
+openclaw plugins install git:github.com/lcorneliussen/openclaw-bitbucket@v0.3.6 --force --no-enable --accept-capabilities
 openclaw plugins reload bitbucket
 ```
+
+If the plugin is intentionally disabled, leave it disabled and skip the reload.
+After reloading, refresh the Control UI and open **Bitbucket** in the sidebar.
+Version 0.3.6 uses the native account page; existing
+`/plugins/bitbucket/connect` links redirect there after signing in to OpenClaw.
+OpenClaw 2026.10.2 remains the minimum supported host version.
 
 ## Personal logins
 

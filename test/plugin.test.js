@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { mkdtemp, open, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { Readable } from "node:stream";
@@ -524,10 +524,21 @@ test("the git credential helper answers for bitbucket.org from the login file on
   const dir = await stateDir();
   const file = await writeLogin(dir, { ...login("p"), scopeCheck: scopeCheck(REQUIRED_SCOPES) });
   const helper = path.join(scripts, "git-credential-bitbucket");
+  // Without a login the helper exits before reading stdin. File-backed input
+  // keeps that valid early exit from racing a pipe writer on fast hosts.
   const ask = async (env, host) => {
-    const child = run(helper, ["get"], { env: { PATH: process.env.PATH, ...env } });
-    child.child.stdin.end(`protocol=https\nhost=${host}\n\n`);
-    return (await child).stdout;
+    const request = path.join(dir, "credential-request");
+    await writeFile(request, `protocol=https\nhost=${host}\n\n`);
+    const input = await open(request, "r");
+    try {
+      return execFileSync(helper, ["get"], {
+        env: { PATH: process.env.PATH, ...env },
+        stdio: [input.fd, "pipe", "pipe"],
+        encoding: "utf8",
+      });
+    } finally {
+      await input.close();
+    }
   };
   assert.equal(await ask({ BITBUCKET_LOGIN_FILE: file }, "bitbucket.org"), "username=x-bitbucket-api-token-auth\npassword=token-of-p\n");
   assert.equal(await ask({ BITBUCKET_LOGIN_FILE: file }, "github.com"), "");
