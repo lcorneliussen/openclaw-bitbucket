@@ -61,7 +61,7 @@ export function mountAccount(root, ctx) {
   token.setAttribute("aria-describedby", notice.id);
   settings.style.cssText = "color:var(--accent,#8ab4ff);font-size:13px";
   scopes.style.cssText =
-    "margin:8px 0 0;padding-left:18px;font:12px/1.6 var(--mono,ui-monospace,SFMono-Regular,monospace)";
+    "margin:8px 0 0;padding-left:18px;font:13px/1.6 var(--mono,ui-monospace,SFMono-Regular,monospace)";
   const help = node(
     "div",
     {},
@@ -72,7 +72,7 @@ export function mountAccount(root, ctx) {
     }),
     scopes,
   );
-  help.style.cssText = "font-size:13px;color:var(--muted,#888)";
+  help.style.cssText = "font-size:13px;color:var(--text,inherit)";
   form.append(
     node("label", {}, "Atlassian account email", style(email, fieldStyle)),
     node("label", {}, "Scoped Bitbucket API token", style(token, fieldStyle)),
