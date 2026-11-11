@@ -84,9 +84,11 @@ openclaw plugins reload bitbucket
 
 ## Personal logins
 
-1. A person opens `/plugins/bitbucket/connect` on the gateway's address, or
-   the Bitbucket tab in the Control UI, and enters their Atlassian account
-   e-mail and a Bitbucket API token. The page links to
+1. Open **Bitbucket** in the Control UI sidebar and enter your Atlassian
+   account e-mail and a Bitbucket API token. Sign in to OpenClaw first. Old
+   `/plugins/bitbucket/connect` links redirect to this native page. The form
+   uses the authenticated Gateway connection; it does not submit through an
+   external plugin frame. The page links to
    [Atlassian API tokens](https://id.atlassian.com/manage-profile/security/api-tokens).
    Choose **Create API token with scopes**, then **Bitbucket**, with:
 
@@ -132,12 +134,17 @@ openclaw plugins reload bitbucket
 
 3. `bb` and the git credential helper read the token from that file.
 
-Behind trusted-proxy auth, include the gateway's browser origin in
-`gateway.controlUi.allowedOrigins`. The connect page uses a `same-origin`
-referrer policy in its HTML and response header so browsers keep that origin
-on form POSTs, even if the gateway sets a `no-referrer` response header.
-Cross-origin requests still send no referrer; the gateway's origin checks and
-the form's single-use tickets remain in effect.
+Connection metadata is read through `bitbucket.connection.get` with
+`operator.read`. `bitbucket.connection.connect` (e-mail and token), `.check`
+and `.disconnect` require `operator.write` and use the authenticated
+requester's profile; no submitted profile ID is accepted. Responses contain
+account metadata and permission-check results, never the saved token. The
+password input is cleared on submission and on view disposal. Connecting,
+checking and disconnecting share one per-profile operation coordinator.
+
+The legacy URL is only a static GET/HEAD redirect. It neither reads saved
+logins nor accepts credential POSTs. OpenClaw's external-plugin cookie grant
+remains read-only: GET/HEAD access does not authorize a mutation.
 
 The token is never placed in the environment: OpenClaw records plugin-supplied
 environment in approval and audit metadata. The agent does not choose the
@@ -161,12 +168,12 @@ identity either. Plugin values override anything a command passes in `env`, so
 
 ### The Control UI tab
 
-The tab shows whether you are connected. OpenClaw renders plugin pages in a
-read-only frame, so the form is hidden there and the page asks you to open it
-in its own browser tab, displaying the full selectable address. Behind a
-sign-in proxy whose session cookie is not sent to framed pages, the tab does
-not load at all; the direct address still works. Set `controlUiTab` to `false`
-to hide it.
+The native page shows your connection and token-permission status and supports
+connect, replacement, permission check and disconnect. It uses the Control UI's
+authenticated parent connection, so it works without third-party frame cookies.
+A read-only connection can see its own account metadata but cannot change the
+login. Set `controlUiTab` to `false` to hide its sidebar navigation; this does
+not change Gateway method authorization or remove an existing login.
 
 ## Publishing from the gateway
 

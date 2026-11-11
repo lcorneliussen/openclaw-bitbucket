@@ -552,7 +552,7 @@ test("the publish actions are registered, and need a signed-in person", async ()
     logger: {},
     runtime: { state: { resolveStateDir: () => "/nonexistent" }, agent: { session: { getSessionEntry: async () => undefined } } },
     on() {},
-    registerHttpRoute() {},
+    registerHttpRoute() {}, registerGatewayMethod() {},
     session: { controls: { registerSessionAction: (a) => actions.set(a.id, a), registerControlUiDescriptor() {} } },
   };
   index.default.register(api);
@@ -637,7 +637,7 @@ for (const host of ["legacy", "async-only", "both", "async-failure"]) test(`exec
   index.default.register({
     pluginConfig: {}, logger: { warn: message => warnings.push(message) },
     runtime: { state: { resolveStateDir: () => dir }, agent: { session: sessions } },
-    on: (name, handler) => hooks.set(name, handler), registerHttpRoute() {},
+    on: (name, handler) => hooks.set(name, handler), registerHttpRoute() {}, registerGatewayMethod() {},
     session: { controls: { registerSessionAction() {}, registerControlUiDescriptor() {} } },
   });
   const env = await hooks.get("resolve_exec_env")({ sessionKey: "child", host: "gateway" }, { agentId: "main" });
@@ -651,4 +651,33 @@ for (const host of ["legacy", "async-only", "both", "async-failure"]) test(`exec
     assert.deepEqual(calls, ["child", "parent"]);
     assert.deepEqual(warnings, []);
   }
+});
+
+test("native account RPCs require read/write scopes and reject submitted identities",async()=>{
+ const dir=await stateDir(), methods=new Map();
+ const {createConnectionService}=await import("../lib/connection.js");
+ const service=createConnectionService({stateDir:dir,verify:async()=>"Ada"});
+ let person={profileId:"native-owner",displayName:"Ada"};
+ index.registerConnectionMethods({registerGatewayMethod:(id,handler,opts)=>methods.set(id,{handler,opts})},{connection:service,currentProfile:()=>person,enabled:true});
+ const invoke=async(action,params={})=>{let out;await methods.get(`bitbucket.connection.${action}`).handler({params,respond:(ok,data,error)=>{out={ok,data,error}}});return out};
+ assert.equal(methods.get("bitbucket.connection.get").opts.scope,"operator.read");
+ for(const action of ["connect","check","disconnect"])assert.equal(methods.get(`bitbucket.connection.${action}`).opts.scope,"operator.write");
+ for(const params of [{profileId:"other",user:"ada@example.invalid",token:"synthetic"},{user:"a",token:"x".repeat(8193)},null]){
+   const out=await invoke("connect",params);assert.equal(out.ok,false);assert.equal(out.error.code,"INVALID_REQUEST");assert.doesNotMatch(JSON.stringify(out),/synthetic|xxxx/);
+ }
+ const connected=await invoke("connect",{user:"ada@example.invalid",token:"native-synthetic-secret"});
+ assert.equal(connected.data.status,200);assert.equal(connected.data.enabled,true);assert.doesNotMatch(JSON.stringify(connected),/native-synthetic-secret/);
+ assert.equal((await readLogin(dir,"native-owner")).user,"ada@example.invalid");
+ person=undefined;assert.equal((await invoke("disconnect")).data.status,403);assert.ok(await readLogin(dir,"native-owner"));
+});
+
+test("the legacy URL only redirects reads and never processes a submitted token",async()=>{
+ let route;
+ index.default.register({pluginConfig:{},config:{gateway:{controlUi:{basePath:"/gateway/"}}},logger:{},runtime:{state:{resolveStateDir:()=>"/unavailable"},agent:{session:{getSessionEntry:async()=>undefined}}},on(){},registerGatewayMethod(){},registerHttpRoute:r=>{route=r},session:{controls:{registerSessionAction(){},registerControlUiDescriptor(){}}}});
+ assert.equal(route.auth,"plugin");
+ for(const method of ["GET","HEAD","POST","PUT"]){
+   const req={method,async *[Symbol.asyncIterator](){throw Error("request body must not be read")}};const res=response();await route.handler(req,res);
+   assert.equal(res.statusCode,["GET","HEAD"].includes(method)?302:405);
+   if(["GET","HEAD"].includes(method))assert.equal(res.body,"");else assert.match(res.body,/Control UI/);if(method==="GET")assert.equal(res.headers.location,"/gateway/plugin?plugin=bitbucket&id=account");
+ }
 });
