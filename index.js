@@ -163,7 +163,7 @@ export function registerConnectionMethods(api, { connection, currentProfile, ena
         respond(false, undefined, { code:"INVALID_REQUEST", message:"Invalid Bitbucket connection request." }); return;
       }
       const profile = currentProfile();
-      if (!profile?.profileId) { respond(true, {status:403,notice:{ok:false,text:"Sign in to OpenClaw before managing a personal Bitbucket login."}}); return; }
+      if (!profile?.profileId) { respond(true, {status:403,enabled,notice:{ok:false,text:"Sign in to OpenClaw before managing a personal Bitbucket login."}}); return; }
       try {
         const model = action === "get" ? await connection.snapshot(profile) : await connection.run(profile, new URLSearchParams({ ...params, action }));
         respond(true, { ...model, enabled, requiredScopes:REQUIRED_SCOPES, tokenSettingsUrl:TOKEN_SETTINGS_URL });

@@ -32,7 +32,7 @@ async function loadIndex() {
       encodeURIComponent(`
         export async function resolve(specifier, context, next) {
           if (specifier.startsWith("openclaw/plugin-sdk/")) {
-            return { url: "data:text/javascript,export const definePluginEntry=(e)=>e;export const getPluginRuntimeGatewayRequestScope=()=>undefined;", shortCircuit: true };
+            return { url: "data:text/javascript,export const definePluginEntry=(e)=>e;export const getPluginRuntimeGatewayRequestScope=()=>globalThis.__bitbucketTestRequestScope;", shortCircuit: true };
           }
           return next(specifier, context);
         }`),
@@ -680,4 +680,20 @@ test("the legacy URL only redirects reads and never processes a submitted token"
    assert.equal(res.statusCode,["GET","HEAD"].includes(method)?302:405);
    if(["GET","HEAD"].includes(method))assert.equal(res.body,"");else assert.match(res.body,/Control UI/);if(method==="GET")assert.equal(res.headers.location,"/gateway/plugin?plugin=bitbucket&id=account");
  }
+});
+
+test("registered account methods derive the profile from the actual SDK request scope",async()=>{
+ const dir=await stateDir(),methods=new Map();
+ await writeLogin(dir,login("scope-a"));await writeLogin(dir,login("scope-b","bea@example.invalid"));
+ index.default.register({pluginConfig:{},logger:{},runtime:{state:{resolveStateDir:()=>dir},agent:{session:{getSessionEntry:async()=>undefined}}},on(){},registerGatewayMethod:(name,handler)=>methods.set(name,handler),registerHttpRoute(){},session:{controls:{registerSessionAction(){},registerControlUiDescriptor(){}}}});
+ const invoke=async(action,params={})=>{let out;await methods.get(`bitbucket.connection.${action}`)({params,respond:(ok,data)=>{out={ok,data}}});return out};
+ try{
+  for(const [id,email]of [["scope-a","ada@example.com"],["scope-b","bea@example.invalid"]]){
+    globalThis.__bitbucketTestRequestScope={client:{authenticatedUserProfile:{profileId:id,displayName:id}}};
+    const out=await invoke("get");assert.equal(out.data.login.user,email);assert.doesNotMatch(JSON.stringify(out),/token-of-/);
+  }
+  globalThis.__bitbucketTestRequestScope=undefined;
+  const denied=await invoke("disconnect");assert.equal(denied.data.status,403);assert.equal(denied.data.enabled,true);
+  assert.ok(await readLogin(dir,"scope-a"));assert.ok(await readLogin(dir,"scope-b"));
+ }finally{delete globalThis.__bitbucketTestRequestScope}
 });

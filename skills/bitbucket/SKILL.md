@@ -57,7 +57,7 @@ confirm. Tell them what is ready to publish.
 | Result | Meaning |
 |---|---|
 | a path | The gateway gave this session its owner's login. Run `{baseDir}/scripts/bb …` wherever this page says `twg bb …`. `git` commits as that person. |
-| empty | The gateway has personal logins, and the person this session belongs to has not connected one. Do not look for another login. Tell them to open `$BITBUCKET_CONNECT_PATH` on the gateway's address in their browser, connect, and ask again. |
+| empty | The gateway has personal logins, and the person this session belongs to has not connected one. Do not look for another login. Tell them to open Bitbucket in the Control UI sidebar, connect, and ask again. `$BITBUCKET_CONNECT_PATH` on the gateway redirects to that native page; it is not a credential form. |
 | `unset` | No personal logins here. `twg` takes the token from `TWG_BBC_USER` and `TWG_BBC_TOKEN`, or from `twg setup bitbucket`. |
 
 With a login file, `git push` and `git fetch` normally just work. If git

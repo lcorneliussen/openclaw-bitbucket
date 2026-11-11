@@ -150,3 +150,42 @@ test("native navigation respects the configured visibility and removes contribut
     assert.equal(removed, enabled ? 2 : 1);
   }
 });
+
+test("a transient startup probe retries without retrying credentials and cancels on disposal", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { host } = setup();
+  let requests = 0,
+    nav = 0;
+  host.ui = {
+    registerPage: () => () => {},
+    registerNavigation: () => {
+      nav++;
+      return () => {};
+    },
+  };
+  host.request = async () => {
+    if (++requests === 1) throw Error("temporary");
+    return state;
+  };
+  const stop = plugin.activate(host);
+  await settle();
+  assert.equal(nav, 0);
+  t.mock.timers.tick(250);
+  await settle();
+  assert.equal(requests, 2);
+  assert.equal(nav, 1);
+  stop();
+  const second = setup();
+  let cancelledRequests = 0;
+  second.host.ui = host.ui;
+  second.host.request = async () => {
+    cancelledRequests++;
+    throw Error("temporary");
+  };
+  const close = plugin.activate(second.host);
+  await settle();
+  close();
+  t.mock.timers.tick(2000);
+  await settle();
+  assert.equal(cancelledRequests, 1);
+});

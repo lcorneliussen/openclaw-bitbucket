@@ -247,39 +247,53 @@ export default {
     let disposed = false,
       generation = 0,
       signature,
-      stopNav;
+      stopNav,
+      retryTimer;
     const stopPage = host.ui.registerPage({
       id: "account",
       label: "Bitbucket",
       mount: mountAccount,
     });
+    const probe = async (epoch, attempt = 0) => {
+      try {
+        const data = await host.request(method("get"), {});
+        if (disposed || epoch !== generation) return;
+        if (data.enabled)
+          stopNav ??= host.ui.registerNavigation({
+            id: "account",
+            label: "Bitbucket",
+            page: { id: "account" },
+            icon: "git-branch",
+            order: 50,
+          });
+      } catch {
+        // Read-only startup probes retry twice; credential writes never retry.
+        if (!disposed && epoch === generation && attempt < 2) {
+          retryTimer = setTimeout(() => {
+            retryTimer = undefined;
+            void probe(epoch, attempt + 1);
+          }, [250, 1000][attempt]);
+        }
+      }
+    };
     const sync = () => {
       const key = `${host.connection.connected}:${host.connection.canRead}`;
       if (key === signature) return;
       signature = key;
       const epoch = ++generation;
+      clearTimeout(retryTimer);
+      retryTimer = undefined;
       stopNav?.();
       stopNav = undefined;
-      if (!host.connection.connected || !host.connection.canRead) return;
-      host
-        .request(method("get"), {})
-        .then((data) => {
-          if (!disposed && epoch === generation && data.enabled)
-            stopNav = host.ui.registerNavigation({
-              id: "account",
-              label: "Bitbucket",
-              page: { id: "account" },
-              icon: "git-branch",
-              order: 50,
-            });
-        })
-        .catch(() => {});
+      if (host.connection.connected && host.connection.canRead)
+        void probe(epoch);
     };
     const stop = host.subscribe(sync);
     sync();
     return () => {
       disposed = true;
       generation++;
+      clearTimeout(retryTimer);
       stop();
       stopNav?.();
       stopPage();

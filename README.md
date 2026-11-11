@@ -250,6 +250,18 @@ It pushes a branch `openclaw/live-<time>`, publishes twice into one draft
 pull request, checks that a branch moved on Bitbucket is not forced, then
 declines the pull request and deletes the branch.
 
+Optional browser evidence uses a separately installed Playwright module:
+
+```sh
+node tools/check-account-ui.mjs PLAYWRIGHT_MODULE OUTPUT_DIRECTORY
+```
+
+Pass the module entry path and an output directory as the two arguments. The
+checker uses synthetic accounts, writes six dark/light screenshots at
+320/390/960 pixels, and asserts RPC dispatch, cleared and hidden credential
+inputs, no horizontal overflow and stable action placement. It contacts no
+Bitbucket API or live gateway and is separate from the Node test suite.
+
 ## License
 
 MIT
