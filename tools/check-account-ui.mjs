@@ -73,6 +73,34 @@ try {
           host,
         });
       }, moduleUrl);
+      const creationLink = page.getByRole("link", {
+        name: "Create a Bitbucket API token",
+      });
+      if (!(await creationLink.isVisible()))
+        throw Error(
+          "Token creation link must be visible without expanding help",
+        );
+      if (
+        (await creationLink.getAttribute("href")) !==
+        "https://id.atlassian.com/manage-profile/security/api-tokens"
+      )
+        throw Error("Unexpected token management destination");
+      await page
+        .getByText(
+          "Choose “Create API token with scopes”, select Bitbucket, then grant all six scopes:",
+        )
+        .waitFor();
+      for (const scope of [
+        "read:user:bitbucket",
+        "read:repository:bitbucket",
+        "write:repository:bitbucket",
+        "read:pullrequest:bitbucket",
+        "write:pullrequest:bitbucket",
+        "read:pipeline:bitbucket",
+      ]) {
+        if (!(await page.getByText(scope, { exact: true }).isVisible()))
+          throw Error("Missing visible scope: " + scope);
+      }
       await page
         .getByLabel("Atlassian account email")
         .fill("ada@example.invalid");

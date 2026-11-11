@@ -63,13 +63,12 @@ export function mountAccount(root, ctx) {
   scopes.style.cssText =
     "margin:8px 0 0;padding-left:18px;font:12px/1.6 var(--mono,ui-monospace,SFMono-Regular,monospace)";
   const help = node(
-    "details",
+    "div",
     {},
-    node("summary", { textContent: "Token creation and required scopes" }),
     settings,
     node("p", {
       textContent:
-        "When creating the token, choose Bitbucket and grant these scopes:",
+        "Choose “Create API token with scopes”, select Bitbucket, then grant all six scopes:",
     }),
     scopes,
   );
