@@ -272,7 +272,58 @@ test("read-only opening shows token presence without calling the check mutation"
   assert.ok(hasText(root, "Token saved"));
   assert.equal(hasText(root, "Connected"), false);
   assert.equal(find(root, "form").hidden, true);
+  find(root, "button", "Refresh status").onclick();
+  await settle();
+  assert.deepEqual(
+    calls.map((c) => c.method),
+    ["bitbucket.connection.get", "bitbucket.connection.get"],
+  );
   view.dispose();
+});
+
+test("read-only status preserves saved negative permission outcomes as saved results", async () => {
+  for (const outcome of ["missing", "rejected"]) {
+    const { host, calls } = setup(false);
+    host.request = async (method, params) => {
+      calls.push({ method, params });
+      return {
+        ...saved,
+        login: {
+          ...saved.login,
+          scopeCheck: {
+            status: outcome,
+            checkedAt: "2026-01-01T00:00:00Z",
+            ...(outcome === "missing" ? { granted: [] } : {}),
+          },
+        },
+      };
+    };
+    const root = new Node("root"),
+      view = mountAccount(root, { host });
+    await settle();
+    assert.ok(
+      hasText(
+        root,
+        outcome === "missing"
+          ? "Saved check: missing scopes"
+          : "Saved check: token rejected",
+      ),
+    );
+    assert.ok(
+      hasText(
+        root,
+        outcome === "missing"
+          ? "Required scopes were missing at the last saved check."
+          : "Bitbucket rejected this token at the last saved check.",
+      ),
+    );
+    assert.equal(hasText(root, "Connected"), false);
+    assert.deepEqual(
+      calls.map((c) => c.method),
+      ["bitbucket.connection.get"],
+    );
+    view.dispose();
+  }
 });
 
 test("a failed opening check does not show stale verification as connected", async () => {
@@ -290,6 +341,21 @@ test("a failed opening check does not show stale verification as connected", asy
   await settle();
   assert.ok(hasText(root, "Connection needs attention"));
   assert.ok(hasText(root, "Bitbucket is unavailable."));
+  const labels = [...root.all()]
+    .map((n) => n.textContent)
+    .filter((t) => typeof t === "string");
+  assert.equal(labels.filter((t) => t.startsWith("Last attempt:")).length, 1);
+  const savedTime = new Date(saved.login.scopeCheck.checkedAt).toLocaleString(
+    undefined,
+    { dateStyle: "short", timeStyle: "short" },
+  );
+  assert.equal(labels.includes(`Last attempt: ${savedTime}`), false);
+  assert.equal(
+    labels.some(
+      (t) => t.startsWith("Last checked:") || t.startsWith("Saved check:"),
+    ),
+    false,
+  );
   assert.equal(hasText(root, "Connected"), false);
   assert.ok(hasText(root, "Token saved on this gateway."));
   view.dispose();

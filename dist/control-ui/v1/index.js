@@ -98,6 +98,7 @@ export function mountAccount(root, ctx) {
   );
   notice.id = "bitbucket-connection-notice";
   token.setAttribute("aria-describedby", notice.id);
+  // Token creation uses a fixed Atlassian URL, without account data or tokens.
   const settings = node("a", {
     textContent: "Create a scoped Bitbucket API token",
     href: "https://id.atlassian.com/manage-profile/security/api-tokens",
@@ -200,6 +201,20 @@ export function mountAccount(root, ctx) {
     const saved = !!model?.login,
       editing = ["connect", "replace"].includes(mode);
     const scopesState = model?.login?.scopeCheck?.status;
+    const savedFailure =
+      checkState === "idle" && ["missing", "rejected"].includes(scopesState);
+    const savedTitle =
+      scopesState === "missing"
+        ? "Saved check: missing scopes"
+        : scopesState === "rejected"
+          ? "Saved check: token rejected"
+          : "Token saved";
+    const savedDetail =
+      scopesState === "missing"
+        ? "Required scopes were missing at the last saved check."
+        : scopesState === "rejected"
+          ? "Bitbucket rejected this token at the last saved check."
+          : "Permissions have not been checked during this visit.";
     title.textContent = !connected
       ? "OpenClaw disconnected"
       : !host.connection.canRead
@@ -219,7 +234,7 @@ export function mountAccount(root, ctx) {
                   : checkState === "failed"
                     ? "Connection needs attention"
                     : checkState !== "fresh"
-                      ? "Token saved"
+                      ? savedTitle
                       : scopesState === "verified"
                         ? "Connected"
                         : scopesState === "missing"
@@ -254,15 +269,12 @@ export function mountAccount(root, ctx) {
                     ? "Bitbucket rejected the saved token. Replace it to reconnect."
                     : "The full granted-scope list could not be verified."
               : mode === "overview"
-                ? error ||
-                  (!saved
-                    ? model?.notice?.text || ""
-                    : "Permissions have not been checked during this visit.")
+                ? error || (!saved ? model?.notice?.text || "" : savedDetail)
                 : saved
-                  ? "Permissions have not been checked during this visit."
+                  ? savedDetail
                   : "";
     status.style.borderLeftColor =
-      checkState === "failed"
+      checkState === "failed" || savedFailure
         ? "var(--danger,#c33)"
         : checkState === "fresh" && scopesState === "verified"
           ? "var(--success,#26804b)"
@@ -476,7 +488,6 @@ export function mountAccount(root, ctx) {
     },
   };
 }
-
 export default {
   id: "bitbucket",
   activate(host) {
