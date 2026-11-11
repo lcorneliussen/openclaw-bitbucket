@@ -110,7 +110,9 @@ test("read-only UI never dispatches a credential change, even via a synthetic su
       .filter(
         (n) =>
           n.tagName === "input" ||
-          (n.tagName === "button" && n.textContent !== "Refresh status"),
+          (n.tagName === "button" &&
+            n.textContent !== "Refresh status" &&
+            n.attrs["aria-controls"] !== "bitbucket-extra-grants"),
       )
       .every((n) => n.disabled),
   );
@@ -488,5 +490,48 @@ test("unreported grants stay unknown instead of becoming missing or extra permis
   );
   assert.ok(hasText(root, "Scopes unknown"));
   assert.equal(hasText(root, "Connected"), false);
+  view.dispose();
+});
+
+test("a long additional-grants list expands locally while required grants stay visible", async () => {
+  const { host, calls } = setup(false),
+    extra = [
+      "read:workspace:bitbucket",
+      "write:workspace:bitbucket",
+      "read:project:bitbucket",
+      "write:project:bitbucket",
+      "read:snippet:bitbucket",
+      "write:snippet:bitbucket",
+    ];
+  host.request = async (method, params) => {
+    calls.push({ method, params });
+    return {
+      ...saved,
+      login: {
+        ...saved.login,
+        scopeCheck: {
+          ...saved.login.scopeCheck,
+          granted: [...state.requiredScopes, ...extra],
+        },
+      },
+    };
+  };
+  const root = new Node("root"),
+    view = mountAccount(root, { host });
+  await settle();
+  const list = [...root.all()].find((n) => n.id === "bitbucket-extra-grants"),
+    toggle = find(root, "button", "Show all");
+  assert.equal(list.hidden, true);
+  assert.equal(toggle.attrs["aria-expanded"], "false");
+  assert.ok(hasText(root, "Additional grants (6)"));
+  toggle.onclick();
+  assert.equal(list.hidden, false);
+  assert.equal(toggle.attrs["aria-expanded"], "true");
+  assert.equal(toggle.textContent, "Hide");
+  assert.equal(list.children.length, 6);
+  assert.ok(list.children.every((n) => n.children[0].textContent === "✓"));
+  toggle.onclick();
+  assert.equal(list.hidden, true);
+  assert.equal(calls.length, 1);
   view.dispose();
 });

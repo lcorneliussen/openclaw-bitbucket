@@ -92,7 +92,9 @@ openclaw plugins reload bitbucket
    The status card uses labelled account/token fields and individual permission
    rows: Granted, Missing or Unknown. It shows only scopes actually reported by
    Bitbucket; additional reported grants are grouped as not required by this
-   plugin. Saved scope results are labelled separately from current verification.
+   plugin. More than four additional grants appear behind a counted Show all
+   control, while every required permission stays visible. Saved scope results
+   are labelled separately from current verification.
    Each row exposes its exact scope identifier in its title and accessible name.
    The creation instructions and scope checklist stay visible in that form.
    Cancel returns to status and clears the entered token. **Disconnect…** asks
@@ -271,7 +273,7 @@ node tools/check-account-ui.mjs PLAYWRIGHT_MODULE OUTPUT_DIRECTORY
 
 Pass the module entry path and an output directory as the two arguments. The
 checker uses synthetic accounts, writes dark/light screenshots at
-320/390/960 pixels across nine account states. It asserts one opening check,
+320/390/960 pixels across eleven account states. It asserts one opening check,
 explicit replacement, token clearing, disconnect confirmation and cancellation,
 visible scoped-token help in the form, no horizontal overflow and stable
 feedback. It contacts no Bitbucket API or live gateway and is separate from the Node test suite.

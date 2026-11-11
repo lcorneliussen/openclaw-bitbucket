@@ -378,6 +378,56 @@ try {
           throw Error("Missing scopes not identified");
         await capture("saved-" + variant);
       }
+      await page.evaluate(() => {
+        window.view.dispose();
+        window.host.connection.canWrite = true;
+        window.calls = [];
+        const extra = [
+          "read:workspace:bitbucket",
+          "write:workspace:bitbucket",
+          "read:project:bitbucket",
+          "write:project:bitbucket",
+          "read:snippet:bitbucket",
+          "write:snippet:bitbucket",
+        ];
+        const model = {
+          ...window.saved,
+          login: {
+            ...window.saved.login,
+            scopeCheck: {
+              ...window.saved.login.scopeCheck,
+              granted: [...window.baseModel.requiredScopes, ...extra],
+            },
+          },
+        };
+        window.host.request = async (method) => {
+          window.calls.push(method);
+          return model;
+        };
+        window.view = window.accountModule.mountAccount(
+          document.querySelector("#root"),
+          { host: window.host },
+        );
+      });
+      await page
+        .getByRole("status")
+        .filter({ hasText: /^Connected$/ })
+        .waitFor();
+      if ((await page.locator("li[aria-label]:visible").count()) !== 6)
+        throw Error(
+          "Required grants should stay visible with additional grants folded",
+        );
+      await capture("many-extra");
+      await page.getByRole("button", { name: "Show all", exact: true }).click();
+      if ((await page.locator("li[aria-label]:visible").count()) !== 12)
+        throw Error("Additional grants did not expand");
+      await capture("many-extra-expanded");
+      await page.getByRole("button", { name: "Hide", exact: true }).click();
+      if (
+        (await page.evaluate(() => window.calls)).join(",") !==
+        "bitbucket.connection.get,bitbucket.connection.check"
+      )
+        throw Error("Expanding scopes dispatched a request");
       results.at(-1).states = states;
       await page.evaluate(() => {
         window.host.connection.connected = false;
@@ -395,5 +445,5 @@ await fs.writeFile(
   JSON.stringify(results, null, 2),
 );
 console.log(
-  "Six browser cases passed across nine account states; checks, explicit editing and disconnect confirmation verified",
+  "Six browser cases passed across eleven account states; checks, explicit editing and disconnect confirmation verified",
 );

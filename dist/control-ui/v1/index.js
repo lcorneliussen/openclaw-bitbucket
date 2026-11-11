@@ -108,14 +108,29 @@ export function mountAccount(root, ctx) {
     node("ul"),
     "list-style:none;padding:0;margin:0",
   );
-  const extraList = style(node("ul"), "list-style:none;padding:0;margin:0");
+  let extraCount = 0,
+    extraExpanded = false;
+  const extraList = style(
+    node("ul", { id: "bitbucket-extra-grants" }),
+    "list-style:none;padding:0;margin:0",
+  );
+  const extraHeading = style(
+    node("h3"),
+    "font-size:13px;font-weight:600;margin:0",
+  );
+  const extraToggle = button("Show all", () => {
+    extraExpanded = !extraExpanded;
+    renderExtraVisibility();
+  });
+  extraToggle.style.cssText += ";font-size:12px;padding:3px 8px";
+  extraToggle.setAttribute("aria-controls", extraList.id);
   const extraGroup = style(
     node(
       "div",
       {},
       style(
-        node("h3", { textContent: "Additional grants" }),
-        "font-size:13px;font-weight:600;margin:12px 0 4px",
+        node("div", {}, extraHeading, extraToggle),
+        "display:flex;align-items:center;justify-content:space-between;gap:8px;margin:12px 0 4px",
       ),
       style(
         node("p", { textContent: "Not required by this plugin." }),
@@ -125,6 +140,15 @@ export function mountAccount(root, ctx) {
     ),
     "margin:0",
   );
+  function renderExtraVisibility() {
+    const expandable = extraCount > 4,
+      visible = extraCount > 0 && (!expandable || extraExpanded);
+    extraHeading.textContent = `Additional grants (${extraCount})`;
+    show(extraToggle, expandable);
+    show(extraList, visible);
+    extraToggle.textContent = visible ? "Hide" : "Show all";
+    extraToggle.setAttribute("aria-expanded", String(visible));
+  }
   const permissionPanel = style(
     node(
       "div",
@@ -229,7 +253,9 @@ export function mountAccount(root, ctx) {
     permissionList.replaceChildren(...required.map(row));
     const extra = known ? reported.filter((s) => !required.includes(s)) : [];
     extraList.replaceChildren(...extra.map(row));
-    show(extraGroup, extra.length > 0);
+    extraCount = extra.length;
+    renderExtraVisibility();
+    show(extraGroup, extraCount > 0);
   }
   const connect = button("Connect Bitbucket", () => choose("connect"));
   const replace = button("Replace token…", () => choose("replace"));
@@ -666,6 +692,7 @@ export function mountAccount(root, ctx) {
     checkMessage = "";
     checkAttemptedAt = undefined;
     checkOnOpen = true;
+    extraExpanded = false;
     invalidCredentials = false;
     token.value = "";
     email.value = "";
