@@ -28,5 +28,12 @@
         "description": "Show a Bitbucket tab in the Control UI sidebar."
       }
     }
+  },
+  "uiCapabilities": [
+    "page",
+    "navigation"
+  ],
+  "controlUi": {
+    "entry": "dist/control-ui/v1/index.js"
   }
 }

@@ -7,11 +7,11 @@
 import { randomBytes } from "node:crypto";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
-import { BitbucketRejected, BitbucketUnavailable, inspectToken } from "./lib/bitbucket.js";
-import { scopeCheck } from "./lib/scopes.js";
-import { loginFile, readLogin, removeLogin, writeLogin } from "./lib/logins.js";
+import { loginFile, readLogin } from "./lib/logins.js";
 import { renderPage } from "./lib/page.js";
 import { createPublisher } from "./lib/publish.js";
+import { createConnectionService } from "./lib/connection.js";
+import { REQUIRED_SCOPES, TOKEN_SETTINGS_URL } from "./lib/scopes.js";
 
 export const CONNECT_PATH = "/plugins/bitbucket/connect";
 const TICKET_TTL_MS = 15 * 60_000;
@@ -77,13 +77,12 @@ async function readForm(req) {
   return new URLSearchParams(Buffer.concat(chunks).toString("utf8"));
 }
 
-// The page and its form. `tickets` ties a form to the person it was rendered
-// for, so a request forged from another site cannot store or delete a login.
-export function createConnectHandler({ stateDir, currentProfile, verify = inspectToken, load = readLogin, save = writeLogin, log }) {
+// Compatibility adapter for explicitly authenticated HTTP consumers. The
+// registered browser URL below is redirect-only. Tickets bind each legacy
+// form to its authenticated person and block cross-site credential changes.
+export function createConnectHandler({ currentProfile, connection, ...options }) {
+  connection ??= createConnectionService(options);
   const tickets = new Map();
-  const checks = new Map();
-  const sameLogin = (a, b) => a?.token === b?.token && a?.user === b?.user && a?.stored === b?.stored;
-  const changedLogin = { ok: false, text: "The login changed while checking. Try again." };
 
   const issueTicket = (profileId) => {
     const now = Date.now();
@@ -116,36 +115,9 @@ export function createConnectHandler({ stateDir, currentProfile, verify = inspec
     const nonce = randomBytes(16).toString("base64");
     const profile = currentProfile();
     const profileId = profile?.profileId;
-    const person = profileId ? profile.displayName || profileId : undefined;
-    const page = async (status, notice, observation) => {
-      let login, loginUnreadable = false;
-      try { login = profileId ? await load(stateDir, profileId) : undefined; }
-      catch {
-        log?.warn?.("bitbucket: could not read the saved login");
-        loginUnreadable = true;
-        if (status === 200) status = 502;
-      }
-      // A page reload can itself outlast Disconnect or credential replacement.
-      if (observation?.attempt.cancelled || (observation && !loginUnreadable && !sameLogin(login, observation.login))) {
-        status = 409;
-        notice = changedLogin;
-      } else if (login && observation) {
-        login = { ...login, scopeCheck: observation.check };
-      }
-      send(
-        res,
-        status,
-        renderPage({
-          nonce,
-          path: CONNECT_PATH,
-          person,
-          login,
-          loginUnreadable,
-          ticket: profileId ? issueTicket(profileId) : "",
-          notice,
-        }),
-        nonce,
-      );
+    const page = async (status, notice) => {
+      const model = await connection.snapshot(profile, status, notice);
+      send(res, model.status, renderPage({ ...model, nonce, path: CONNECT_PATH, ticket: profileId ? issueTicket(profileId) : "" }), nonce);
     };
 
     if (req.method === "GET" || req.method === "HEAD") {
@@ -175,125 +147,31 @@ export function createConnectHandler({ stateDir, currentProfile, verify = inspec
       return true;
     }
 
-    if (form.get("action") === "disconnect") {
-      const check = checks.get(profileId);
-      if (check) { check.cancelled = true; check.controller?.abort(); }
-      const closing = { cancelled: true };
-      checks.set(profileId, closing);
-      // A completed disconnect must outlast any credential write already
-      // in flight. Pending network reads are aborted; their results are discarded.
-      closing.committing = (async () => {
-        await check?.committing?.catch(() => {});
-        await removeLogin(stateDir, profileId);
-      })();
-      try { await closing.committing; }
-      catch {
-        log?.warn?.("bitbucket: could not remove the saved login");
-        await page(502, { ok: false, text: "The saved login could not be removed. Try again later." });
-        return true;
-      }
-      finally { if (checks.get(profileId) === closing) checks.delete(profileId); }
-      log?.info?.(`bitbucket: removed the login of profile ${profileId}`);
-      await page(200, { ok: true, text: "Disconnected. The token is deleted from this gateway." });
-      return true;
-    }
-
-    const checking = form.get("action") === "check";
-    if (checks.has(profileId)) {
-      await page(409, { ok: false, text: "Another Bitbucket login operation is running. Wait for it to finish." });
-      return true;
-    }
-    const attempt = { cancelled: false, controller: new AbortController() };
-    // Register before reading so Disconnect can invalidate the waiting attempt.
-    checks.set(profileId, attempt);
-    let existing, observed;
-    const unchanged = async () => {
-      const current = await load(stateDir, profileId);
-      return !attempt.cancelled && sameLogin(current, existing);
-    };
-    try {
-      try { existing = await load(stateDir, profileId); }
-      catch {
-        await page(502, { ok: false, text: "The saved login could not be read; no changes were made." });
-        return true;
-      }
-      if (attempt.cancelled) {
-        await page(409, { ok: false, text: "The login changed while checking. Try again." });
-        return true;
-      }
-      if (checking && !existing) {
-        await page(400, { ok: false, text: "Connect Bitbucket before checking permissions." });
-        return true;
-      }
-      const user = checking ? existing.user : (form.get("user") ?? "").trim();
-      const token = checking ? existing.token : (form.get("token") ?? "").trim();
-      if (!/^[^\s@]+@[^\s@]+$/.test(user) || !token || /\s/.test(token)) {
-        await page(400, { ok: false, text: "Enter the account e-mail and the API token." });
-        return true;
-      }
-      const result = await verify(user, token, undefined, attempt.controller.signal);
-      const { name, scopeCheck: checked } = typeof result === "string" ? { name: result, scopeCheck: scopeCheck() } : result;
-      observed = checked;
-      if (!await unchanged() || attempt.cancelled) {
-        await page(409, { ok: false, text: "The login changed while checking. Try again." });
-        return true;
-      }
-      const connected = {
-        profile: profileId,
-        user,
-        name,
-        token,
-        stored: checking ? existing.stored : new Date().toISOString(),
-        scopeCheck: checked,
-      };
-      attempt.committing = save(stateDir, connected);
-      await attempt.committing;
-      if (attempt.cancelled) {
-        await page(409, { ok: false, text: "The login changed while checking. Try again." });
-        return true;
-      }
-      log?.info?.(`bitbucket: stored a login for profile ${profileId}`);
-      await page(200, { ok: true, text: checking ? "Permission check completed." : `Connected as ${name}.` }, { login: connected, check: checked, attempt });
-    } catch (error) {
-      if (attempt.cancelled) {
-        await page(409, { ok: false, text: "The login changed while checking. Try again." });
-        return true;
-      }
-      if (observed) {
-        log?.warn?.("bitbucket: could not save the login or permission-check result");
-        await page(502, { ok: false, text: checking ? "Permission check completed, but its result could not be saved." : "The Bitbucket login could not be saved. Any previous login was kept." }, checking ? { login: existing, check: observed, attempt } : undefined);
-        return true;
-      }
-      const rejected = error instanceof BitbucketRejected;
-      const checked = checking && rejected ? error.scopeCheck ?? (error.credentialsRejected ? { status: "rejected", checkedAt: new Date().toISOString() } : undefined) : undefined;
-      let recordingFailed = false;
-      if (checked) {
-        try {
-          if (!await unchanged() || attempt.cancelled) {
-            await page(409, changedLogin);
-            return true;
-          }
-          attempt.committing = save(stateDir, { ...existing, scopeCheck: checked });
-          await attempt.committing;
-        } catch {
-          recordingFailed = true;
-          log?.warn?.("bitbucket: could not record the permission-check result");
-        }
-      }
-      if (attempt.cancelled) {
-        await page(409, changedLogin);
-        return true;
-      }
-      if (!rejected) log?.warn?.(`bitbucket: could not store a login: ${error?.message ?? error}`);
-      await page(rejected ? 400 : error instanceof BitbucketUnavailable ? error.status : 502, {
-        ok: false,
-        text: (rejected || error instanceof BitbucketUnavailable ? error.message : "Bitbucket could not be asked just now. Nothing was stored.") + (recordingFailed ? " This result could not be saved." : ""),
-      }, checked ? { login: existing, check: checked, attempt } : undefined);
-    } finally {
-      if (checks.get(profileId) === attempt) checks.delete(profileId);
-    }
+    const model = await connection.run(profile, form);
+    send(res, model.status, renderPage({ ...model, nonce, path: CONNECT_PATH, ticket: issueTicket(profileId) }), nonce);
     return true;
   };
+}
+
+// Authenticated account methods use the requester's profile, never a submitted ID.
+export function registerConnectionMethods(api, { connection, currentProfile, enabled }) {
+  for (const action of ["get", "connect", "check", "disconnect"]) {
+    api.registerGatewayMethod(`bitbucket.connection.${action}`, async ({ params = {}, respond }) => {
+      const allowed = action === "connect" ? ["user", "token"] : [];
+      if (!params || typeof params !== "object" || Array.isArray(params) || Object.keys(params).some(k => !allowed.includes(k)) ||
+          action === "connect" && (typeof params.user !== "string" || params.user.length > 320 || typeof params.token !== "string" || params.token.length > 8192)) {
+        respond(false, undefined, { code:"INVALID_REQUEST", message:"Invalid Bitbucket connection request." }); return;
+      }
+      const profile = currentProfile();
+      if (!profile?.profileId) { respond(true, {status:403,enabled,notice:{ok:false,text:"Sign in to OpenClaw before managing a personal Bitbucket login."}}); return; }
+      try {
+        const model = action === "get" ? await connection.snapshot(profile) : await connection.run(profile, new URLSearchParams({ ...params, action }));
+        respond(true, { ...model, enabled, requiredScopes:REQUIRED_SCOPES, tokenSettingsUrl:TOKEN_SETTINGS_URL });
+      } catch {
+        respond(false, undefined, {code:"UNAVAILABLE",message:"The Bitbucket connection could not be read. Try again later."});
+      }
+    }, { scope: action === "get" ? "operator.read" : "operator.write" });
+  }
 }
 
 export default definePluginEntry({
@@ -328,6 +206,8 @@ export default definePluginEntry({
     // confirm. A Control UI calls these with plugins.sessionAction.
     const currentProfile = () => getPluginRuntimeGatewayRequestScope()?.client?.authenticatedUserProfile;
     const publisher = createPublisher({ stateDir, getSessionEntry, currentProfile });
+    const connection = createConnectionService({ stateDir, log });
+    registerConnectionMethods(api, {connection,currentProfile,enabled:config.controlUiTab !== false});
     const payload = (properties) => ({ type: "object", additionalProperties: false, properties });
     api.session.controls.registerSessionAction({
       id: "publish-options",
@@ -351,27 +231,30 @@ export default definePluginEntry({
       handler: publisher.confirm,
     });
 
+    // The old browser URL is now a public redirect, not a credential endpoint.
+    // No request profile, body or saved login is read here; POST is refused.
+    const base = (api.config?.gateway?.controlUi?.basePath ?? "").replace(/^\/+|\/+$/g, "");
     api.registerHttpRoute({
       path: CONNECT_PATH,
-      auth: "gateway",
+      auth: "plugin",
       match: "exact",
-      handler: createConnectHandler({
-        stateDir,
-        currentProfile,
-        log,
-      }),
+      handler: async (req, res) => {
+        res.setHeader("cache-control", "no-store");
+        if (req.method === "GET" || req.method === "HEAD") {
+          res.statusCode = 302;
+          res.setHeader("location", `${base ? "/"+base : ""}/plugin?plugin=bitbucket&id=account`);
+        } else {
+          res.statusCode = 405;
+          res.setHeader("allow", "GET, HEAD");
+          res.setHeader("content-type", "text/plain; charset=utf-8");
+          res.end("Open the Bitbucket page in the Control UI to manage your connection.");
+          return true;
+        }
+        res.end();
+        return true;
+      },
     });
 
-    if (config.controlUiTab !== false) {
-      api.session.controls.registerControlUiDescriptor({
-        surface: "tab",
-        id: "bitbucket",
-        label: "Bitbucket",
-        description: "Connect your own Bitbucket account.",
-        icon: "git-branch",
-        group: "control",
-        path: CONNECT_PATH,
-      });
-    }
+    // Native navigation is registered by the browser entry after checking config.
   },
 });
