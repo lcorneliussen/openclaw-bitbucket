@@ -74,7 +74,7 @@ try {
         });
       }, moduleUrl);
       const creationLink = page.getByRole("link", {
-        name: "Create a Bitbucket API token",
+        name: "Create a scoped Bitbucket API token",
       });
       if (!(await creationLink.isVisible()))
         throw Error(
@@ -87,7 +87,7 @@ try {
         throw Error("Unexpected token management destination");
       await page
         .getByText(
-          "Choose “Create API token with scopes”, select Bitbucket, then grant all six scopes:",
+          "Unscoped API tokens won’t work. Choose “Create API token with scopes”, select Bitbucket, then grant all six scopes:",
         )
         .waitFor();
       for (const scope of [

@@ -48,7 +48,7 @@ export function mountAccount(root, ctx) {
   const permissions = node("p");
   const scopes = node("ul");
   const settings = node("a", {
-    textContent: "Create a Bitbucket API token",
+    textContent: "Create a scoped Bitbucket API token",
     target: "_blank",
     rel: "noopener noreferrer",
   });
@@ -68,14 +68,14 @@ export function mountAccount(root, ctx) {
     settings,
     node("p", {
       textContent:
-        "Choose “Create API token with scopes”, select Bitbucket, then grant all six scopes:",
+        "Unscoped API tokens won’t work. Choose “Create API token with scopes”, select Bitbucket, then grant all six scopes:",
     }),
     scopes,
   );
   help.style.cssText = "font-size:13px;color:var(--muted,#888)";
   form.append(
     node("label", {}, "Atlassian account email", style(email, fieldStyle)),
-    node("label", {}, "Bitbucket API token", style(token, fieldStyle)),
+    node("label", {}, "Scoped Bitbucket API token", style(token, fieldStyle)),
     notice,
     help,
     submit,
