@@ -211,7 +211,11 @@ const saved = {
     user: "ada@example.invalid",
     name: "Ada Example",
     stored: "2026-01-01T00:00:00Z",
-    scopeCheck: { status: "verified", checkedAt: "2026-01-01T00:00:00Z" },
+    scopeCheck: {
+      status: "verified",
+      checkedAt: "2026-01-01T00:00:00Z",
+      granted: state.requiredScopes,
+    },
   },
 };
 
@@ -230,7 +234,7 @@ test("opening a saved connection checks once and keeps editing explicit", async 
     calls.map((c) => c.method),
     ["bitbucket.connection.get", "bitbucket.connection.check"],
   );
-  assert.ok(hasText(root, "Checking permissions…"));
+  assert.ok(hasText(root, "Checking…"));
   assert.equal(find(root, "form").hidden, true);
   notify();
   notify();
@@ -242,7 +246,7 @@ test("opening a saved connection checks once and keeps editing explicit", async 
   });
   await settle();
   assert.ok(hasText(root, "Connected"));
-  assert.ok(hasText(root, "Token saved on this gateway."));
+  assert.ok(hasText(root, "Saved on gateway"));
   find(root, "button", "Replace token…").onclick();
   assert.equal(find(root, "form").hidden, false);
   assert.ok(hasText(root, "Replace token"));
@@ -305,8 +309,8 @@ test("read-only status preserves saved negative permission outcomes as saved res
       hasText(
         root,
         outcome === "missing"
-          ? "Saved check: missing scopes"
-          : "Saved check: token rejected",
+          ? "Missing scopes (saved)"
+          : "Token rejected (saved)",
       ),
     );
     assert.ok(
@@ -339,25 +343,23 @@ test("a failed opening check does not show stale verification as connected", asy
   const root = new Node("root"),
     view = mountAccount(root, { host });
   await settle();
-  assert.ok(hasText(root, "Connection needs attention"));
+  assert.ok(hasText(root, "Needs attention"));
   assert.ok(hasText(root, "Bitbucket is unavailable."));
   const labels = [...root.all()]
     .map((n) => n.textContent)
     .filter((t) => typeof t === "string");
-  assert.equal(labels.filter((t) => t.startsWith("Last attempt:")).length, 1);
+  assert.equal(labels.filter((t) => t === "Last attempt").length, 1);
   const savedTime = new Date(saved.login.scopeCheck.checkedAt).toLocaleString(
     undefined,
     { dateStyle: "short", timeStyle: "short" },
   );
-  assert.equal(labels.includes(`Last attempt: ${savedTime}`), false);
+  assert.equal(labels.includes(savedTime), false);
   assert.equal(
-    labels.some(
-      (t) => t.startsWith("Last checked:") || t.startsWith("Saved check:"),
-    ),
+    labels.some((t) => t === "Last checked" || t === "Saved check"),
     false,
   );
   assert.equal(hasText(root, "Connected"), false);
-  assert.ok(hasText(root, "Token saved on this gateway."));
+  assert.ok(hasText(root, "Saved on gateway"));
   view.dispose();
 });
 
@@ -416,5 +418,75 @@ test("a failed disconnect stays in confirmation and displays its error", async (
   await settle();
   assert.ok(hasText(root, "The saved login could not be removed."));
   assert.equal(find(root, "button", "Disconnect Bitbucket").disabled, false);
+  view.dispose();
+});
+
+const permissionRows = (root) =>
+  [...root.all()].filter((n) => n.tagName === "li" && n.attrs["aria-label"]);
+
+test("permission rows identify granted, missing and additional reported scopes", async () => {
+  const { host } = setup(false),
+    required = [
+      "read:user:bitbucket",
+      "write:repository:bitbucket",
+      "read:pipeline:bitbucket",
+    ];
+  host.request = async () => ({
+    ...saved,
+    requiredScopes: required,
+    login: {
+      ...saved.login,
+      scopeCheck: {
+        status: "missing",
+        checkedAt: "2026-01-01T00:00:00Z",
+        granted: ["read:user:bitbucket", "read:workspace:bitbucket"],
+      },
+    },
+  });
+  const root = new Node("root"),
+    view = mountAccount(root, { host });
+  await settle();
+  const rows = permissionRows(root);
+  assert.equal(rows.length, 4);
+  for (const [scope, symbol, meaning] of [
+    ["read:user:bitbucket", "✓", "Granted"],
+    ["write:repository:bitbucket", "×", "Missing"],
+    ["read:pipeline:bitbucket", "×", "Missing"],
+    ["read:workspace:bitbucket", "✓", "Granted"],
+  ]) {
+    const row = rows.find((n) => n.attrs["aria-label"].startsWith(scope + ":"));
+    assert.ok(row);
+    assert.equal(row.children[0].textContent, symbol);
+    assert.match(row.attrs["aria-label"], new RegExp(meaning));
+    assert.match(row.attrs["aria-label"], /saved result/);
+  }
+  assert.ok(hasText(root, "Not required by this plugin."));
+  assert.ok(hasText(root, "Saved permission results"));
+  view.dispose();
+});
+
+test("unreported grants stay unknown instead of becoming missing or extra permissions", async () => {
+  const { host } = setup();
+  host.request = async () => ({
+    ...saved,
+    login: {
+      ...saved.login,
+      scopeCheck: { status: "unknown", checkedAt: "2026-01-01T00:00:00Z" },
+    },
+  });
+  const root = new Node("root"),
+    view = mountAccount(root, { host });
+  await settle();
+  const rows = permissionRows(root);
+  assert.equal(rows.length, state.requiredScopes.length);
+  assert.ok(
+    rows.every(
+      (n) =>
+        n.children[0].textContent === "?" &&
+        n.attrs["aria-label"].endsWith(": Unknown"),
+    ),
+  );
+  assert.ok(hasText(root, "Scopes unknown"));
+  assert.equal(hasText(root, "Connected"), false);
   view.dispose();
 });

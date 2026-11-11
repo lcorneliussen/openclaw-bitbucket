@@ -182,6 +182,11 @@ try {
             scopeCheck: {
               status: "verified",
               checkedAt: "2026-01-01T00:00:00Z",
+              granted: [
+                ...window.baseModel.requiredScopes,
+                "read:workspace:bitbucket",
+                "admin:repository:bitbucket",
+              ],
             },
           },
         };
@@ -208,10 +213,7 @@ try {
           { host: window.host },
         );
       });
-      await page
-        .getByRole("status")
-        .filter({ hasText: "Checking permissions…" })
-        .waitFor();
+      await page.getByRole("status").filter({ hasText: "Checking…" }).waitFor();
       if (await page.locator("form").isVisible())
         throw Error("Opening exposed replacement form");
       await capture("checking");
@@ -229,6 +231,32 @@ try {
         "bitbucket.connection.get,bitbucket.connection.check"
       )
         throw Error("Opening check looped");
+      const columns = await page.evaluate(() => {
+        const labels = [...document.querySelectorAll("span")];
+        const account = labels.find((n) => n.textContent === "Account"),
+          token = labels.find((n) => n.textContent === "Token");
+        const a = account.getBoundingClientRect(),
+          t = token.getBoundingClientRect(),
+          av = account.nextElementSibling.getBoundingClientRect(),
+          tv = token.nextElementSibling.getBoundingClientRect();
+        return Math.max(Math.abs(a.x - t.x), Math.abs(av.x - tv.x));
+      });
+      if (columns > 1) throw Error("Account and token columns are misaligned");
+      results.at(-1).columnAlignmentError = columns;
+      const scopeRows = page.locator("li[aria-label]");
+      if ((await scopeRows.count()) !== 8)
+        throw Error("Expected six required and two additional grants");
+      for (const scope of [
+        ...(await page.evaluate(() => window.baseModel.requiredScopes)),
+        "read:workspace:bitbucket",
+        "admin:repository:bitbucket",
+      ]) {
+        const row = page
+          .locator("li")
+          .filter({ has: page.locator(`[title="${scope}"]`) });
+        if (!(await row.getAttribute("aria-label")).endsWith(": Granted"))
+          throw Error("Granted scope not shown individually");
+      }
       await capture("connected");
       await page
         .getByRole("button", { name: "Replace token…", exact: true })
@@ -288,7 +316,7 @@ try {
       });
       await page
         .getByRole("status")
-        .filter({ hasText: /^Connection needs attention$/ })
+        .filter({ hasText: /^Needs attention$/ })
         .waitFor();
       if (
         await page
@@ -298,6 +326,58 @@ try {
       )
         throw Error("Stale verification shown as connected");
       await capture("check-failed");
+      for (const variant of ["missing", "unknown"]) {
+        await page.evaluate((variant) => {
+          window.view.dispose();
+          window.host.connection.canWrite = false;
+          const model = {
+            ...window.saved,
+            login: {
+              ...window.saved.login,
+              scopeCheck: {
+                status: variant,
+                checkedAt: "2026-01-01T00:00:00Z",
+                ...(variant === "missing"
+                  ? {
+                      granted: [
+                        "read:user:bitbucket",
+                        "read:workspace:bitbucket",
+                      ],
+                    }
+                  : {}),
+              },
+            },
+          };
+          window.host.request = async () => model;
+          window.view = window.accountModule.mountAccount(
+            document.querySelector("#root"),
+            { host: window.host },
+          );
+        }, variant);
+        await page
+          .getByRole("status")
+          .filter({
+            hasText:
+              variant === "missing"
+                ? /^Missing scopes \(saved\)$/
+                : /^Token saved$/,
+          })
+          .waitFor();
+        const states = await page
+          .locator("li[aria-label]")
+          .evaluateAll((rows) => rows.map((r) => r.getAttribute("aria-label")));
+        if (
+          variant === "unknown" &&
+          (states.length !== 6 || states.some((s) => !s.endsWith(": Unknown")))
+        )
+          throw Error("Unreported scopes inferred as grants");
+        if (
+          variant === "missing" &&
+          states.filter((s) => s.includes(": Missing")).length !== 5
+        )
+          throw Error("Missing scopes not identified");
+        await capture("saved-" + variant);
+      }
       results.at(-1).states = states;
       await page.evaluate(() => {
         window.host.connection.connected = false;
@@ -315,5 +395,5 @@ await fs.writeFile(
   JSON.stringify(results, null, 2),
 );
 console.log(
-  "Six browser cases passed across seven account states; checks, explicit editing and disconnect confirmation verified",
+  "Six browser cases passed across nine account states; checks, explicit editing and disconnect confirmation verified",
 );

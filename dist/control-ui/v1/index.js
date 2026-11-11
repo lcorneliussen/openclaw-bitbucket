@@ -45,47 +45,197 @@ export function mountAccount(root, ctx) {
     maxLength: 8192,
   });
   const title = style(
-    node("p", { role: "status" }),
-    "font-size:16px;font-weight:600;margin:0 0 8px",
+    node("span", { role: "status" }),
+    "font-size:12px;font-weight:600;line-height:1.4",
   );
-  const account = node("p"),
-    tokenInfo = node("p"),
-    permissions = node("p"),
-    checkedAt = node("p"),
-    readOnly = node("p");
-  for (const el of [account, tokenInfo, permissions, checkedAt, readOnly])
-    el.style.cssText = "margin:6px 0;font-size:13px";
-  tokenInfo.style.color =
-    checkedAt.style.color =
-    readOnly.style.color =
-      "var(--muted,#888)";
+  const statusIcon = node("span");
+  statusIcon.setAttribute("aria-hidden", "true");
+  const statusBadge = style(
+    node("div", {}, statusIcon, title),
+    "display:inline-flex;align-items:baseline;gap:6px;border:1px solid var(--border,#8886);border-radius:99px;padding:3px 9px;max-width:100%",
+  );
+  const account = style(
+    node("p"),
+    "font-size:13px;line-height:1.5;margin:0;overflow-wrap:anywhere",
+  );
+  const tokenInfo = style(
+    node("span"),
+    "display:inline-block;justify-self:start;border:1px solid var(--border,#8886);border-radius:99px;padding:2px 7px;font-size:12px;line-height:1.4",
+  );
+  const permissions = style(
+    node("p"),
+    "font-size:13px;line-height:1.5;margin:0",
+  );
+  const checkedAt = style(node("p"), "font-size:12px;line-height:1.4;margin:0");
+  const timeLabelNode = style(
+    node("p"),
+    "font-size:12px;font-weight:600;margin:0 0 3px",
+  );
+  const readOnly = style(
+    node("p"),
+    "font-size:12px;line-height:1.5;margin:0;padding-top:10px;border-top:1px solid var(--border,#8886)",
+  );
+  const field = (label, value) =>
+    style(
+      node(
+        "div",
+        {},
+        style(
+          node("span", { textContent: label }),
+          "font-size:13px;font-weight:600",
+        ),
+        value,
+      ),
+      "display:grid;grid-template-columns:58px minmax(0,1fr);align-items:baseline;gap:10px",
+    );
+  const accountRow = field("Account", account),
+    tokenRow = field("Token", tokenInfo);
+  const noticeMark = node("span");
+  noticeMark.setAttribute("aria-hidden", "true");
+  const checkNotice = style(
+    node("div", {}, noticeMark, permissions),
+    "display:grid;grid-template-columns:16px minmax(0,1fr);align-items:baseline;gap:8px;border:1px solid var(--border,#8886);border-radius:6px;padding:8px",
+  );
+  const permissionHeading = style(
+    node("h3"),
+    "font-size:13px;font-weight:600;margin:0 0 6px",
+  );
+  const permissionCaption = style(
+    node("p"),
+    "font-size:12px;line-height:1.5;margin:0 0 6px",
+  );
+  const permissionList = style(
+    node("ul"),
+    "list-style:none;padding:0;margin:0",
+  );
+  const extraList = style(node("ul"), "list-style:none;padding:0;margin:0");
+  const extraGroup = style(
+    node(
+      "div",
+      {},
+      style(
+        node("h3", { textContent: "Additional grants" }),
+        "font-size:13px;font-weight:600;margin:12px 0 4px",
+      ),
+      style(
+        node("p", { textContent: "Not required by this plugin." }),
+        "font-size:12px;margin:0 0 6px",
+      ),
+      extraList,
+    ),
+    "margin:0",
+  );
+  const permissionPanel = style(
+    node(
+      "div",
+      {},
+      permissionHeading,
+      permissionCaption,
+      permissionList,
+      extraGroup,
+    ),
+    "padding-top:12px;border-top:1px solid var(--border,#8886)",
+  );
   const status = style(
     node(
       "div",
       {},
       style(
-        node("p", { textContent: "Connection status" }),
-        "font-size:12px;color:var(--muted,#888);margin:0 0 8px",
+        node(
+          "div",
+          {},
+          style(
+            node("h2", { textContent: "Connection" }),
+            "font-size:14px;font-weight:600;margin:0",
+          ),
+          statusBadge,
+        ),
+        "display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap",
       ),
-      title,
-      account,
-      tokenInfo,
-      permissions,
-      checkedAt,
-      readOnly,
+      style(node("div", {}, accountRow, tokenRow), "display:grid;gap:10px"),
+      checkNotice,
+      permissionPanel,
     ),
-    "border:1px solid var(--border,#8886);border-radius:8px;border-left-width:3px;padding:12px 16px;margin:16px 0",
+    "display:grid;gap:12px;border:1px solid var(--border,#8886);border-radius:8px;padding:14px 16px;margin:16px 0;color:var(--text,inherit)",
   );
-  const check = button(
-    "Check again",
-    () =>
-      void invoke(model?.login && host.connection.canWrite ? "check" : "get"),
+  const check = button("Check again", () => {
+    if (mode === "overview")
+      void invoke(model?.login && host.connection.canWrite ? "check" : "get");
+  });
+  check.style.marginLeft = "auto";
+  const timeBlock = node("div", {}, timeLabelNode, checkedAt);
+  const statusFooter = style(
+    node("div", {}, timeBlock, check),
+    "display:flex;align-items:center;justify-content:space-between;gap:8px;padding-top:10px;border-top:1px solid var(--border,#8886)",
   );
+  status.append(statusFooter, readOnly);
+  let permissionKey;
+  function renderPermissionRows(required, reported, known, current) {
+    const key = JSON.stringify({ required, reported, known, current });
+    if (key === permissionKey) return;
+    permissionKey = key;
+    const actions = {
+      read: "Read",
+      write: "Write",
+      admin: "Administer",
+      delete: "Delete",
+    };
+    const resources = {
+      user: "account details",
+      repository: "repositories",
+      pullrequest: "pull requests",
+      pipeline: "pipelines",
+      workspace: "workspaces",
+      project: "projects",
+      snippet: "snippets",
+      webhook: "webhooks",
+      runner: "runners",
+      issue: "issues",
+    };
+    const row = (scope) => {
+      const granted = known && reported.includes(scope),
+        state = known ? (granted ? "Granted" : "Missing") : "Unknown";
+      const mark = style(
+        node("span", { textContent: known ? (granted ? "✓" : "×") : "?" }),
+        `font-size:14px;color:${known && !granted ? "var(--danger,#c33)" : granted && current ? "var(--success,#26804b)" : "inherit"}`,
+      );
+      mark.setAttribute("aria-hidden", "true");
+      const [action, resource] = scope.split(":");
+      const labelText =
+        actions[action] && resources[resource]
+          ? `${actions[action]} ${resources[resource]}`
+          : scope;
+      const label = node("span", { textContent: labelText, title: scope });
+      label.style.cssText = "min-width:0;overflow-wrap:anywhere;font:inherit";
+      const item = style(
+        node(
+          "li",
+          {},
+          mark,
+          label,
+          style(
+            node("span", { textContent: state }),
+            "font-size:11px;font-weight:600;white-space:nowrap;text-align:right",
+          ),
+        ),
+        "display:grid;grid-template-columns:16px minmax(0,1fr) 54px;align-items:baseline;gap:6px;font-size:12px;line-height:1.5;padding:4px 0",
+      );
+      item.setAttribute(
+        "aria-label",
+        `${scope}: ${state}${known && !current ? " (saved result)" : ""}`,
+      );
+      return item;
+    };
+    permissionList.replaceChildren(...required.map(row));
+    const extra = known ? reported.filter((s) => !required.includes(s)) : [];
+    extraList.replaceChildren(...extra.map(row));
+    show(extraGroup, extra.length > 0);
+  }
   const connect = button("Connect Bitbucket", () => choose("connect"));
   const replace = button("Replace token…", () => choose("replace"));
   const disconnect = button("Disconnect…", () => choose("disconnect"));
   const actions = style(
-    node("div", {}, check, connect, replace, disconnect),
+    node("div", {}, connect, replace, disconnect),
     "display:flex;gap:8px;flex-wrap:wrap;margin:12px 0",
   );
   const form = node("form", { autocomplete: "off" });
@@ -133,8 +283,8 @@ export function mountAccount(root, ctx) {
     formIntro,
     node("label", {}, "Atlassian account email", style(email, fieldStyle)),
     node("label", {}, "Scoped Bitbucket API token", style(token, fieldStyle)),
-    notice,
     help,
+    notice,
     style(
       node("div", {}, submit, cancel),
       "display:flex;gap:8px;flex-wrap:wrap",
@@ -201,20 +351,26 @@ export function mountAccount(root, ctx) {
     const saved = !!model?.login,
       editing = ["connect", "replace"].includes(mode);
     const scopesState = model?.login?.scopeCheck?.status;
+    const evidence = model?.login?.scopeCheck;
+    const known =
+      ["verified", "missing"].includes(scopesState) &&
+      Array.isArray(evidence?.granted);
+    const currentGrants =
+      checkState === "fresh" && scopesState === "verified" && known;
     const savedFailure =
       checkState === "idle" && ["missing", "rejected"].includes(scopesState);
     const savedTitle =
       scopesState === "missing"
-        ? "Saved check: missing scopes"
+        ? "Missing scopes (saved)"
         : scopesState === "rejected"
-          ? "Saved check: token rejected"
+          ? "Token rejected (saved)"
           : "Token saved";
     const savedDetail =
       scopesState === "missing"
         ? "Required scopes were missing at the last saved check."
         : scopesState === "rejected"
           ? "Bitbucket rejected this token at the last saved check."
-          : "Permissions have not been checked during this visit.";
+          : "";
     title.textContent = !connected
       ? "OpenClaw disconnected"
       : !host.connection.canRead
@@ -230,28 +386,30 @@ export function mountAccount(root, ctx) {
               : !saved
                 ? "Not connected"
                 : checkState === "pending"
-                  ? "Checking permissions…"
+                  ? "Checking…"
                   : checkState === "failed"
-                    ? "Connection needs attention"
+                    ? "Needs attention"
                     : checkState !== "fresh"
                       ? savedTitle
-                      : scopesState === "verified"
+                      : currentGrants
                         ? "Connected"
                         : scopesState === "missing"
                           ? "Required permissions missing"
                           : scopesState === "rejected"
                             ? "Token rejected"
-                            : "Permissions unverified";
+                            : "Scopes unknown";
     account.textContent = model?.login
       ? `${model.login.name} (${model.login.user})`
       : model?.person
         ? `Signed in to OpenClaw as ${model.person}.`
         : "";
     tokenInfo.textContent = saved
-      ? "Token saved on this gateway."
-      : available
-        ? "No Bitbucket token saved on this gateway."
-        : "";
+      ? "Saved on gateway"
+      : model?.loginUnreadable
+        ? "Unreadable"
+        : available
+          ? "Not saved"
+          : "Unknown";
     permissions.textContent = model?.loginUnreadable
       ? "Ask the gateway operator to check the saved login file and its permissions."
       : !model?.person && model
@@ -262,7 +420,7 @@ export function mountAccount(root, ctx) {
             ? checkMessage || "The current connection could not be verified."
             : checkState === "fresh" && saved
               ? scopesState === "verified"
-                ? "All required token scopes verified. Repository permissions still apply."
+                ? ""
                 : scopesState === "missing"
                   ? "Required scopes are missing. Replace the token to reconnect."
                   : scopesState === "rejected"
@@ -273,12 +431,45 @@ export function mountAccount(root, ctx) {
                 : saved
                   ? savedDetail
                   : "";
-    status.style.borderLeftColor =
+    statusIcon.textContent =
+      checkState === "pending"
+        ? "↻"
+        : currentGrants
+          ? "✓"
+          : checkState === "failed" || savedFailure
+            ? "!"
+            : saved
+              ? "i"
+              : "?";
+    statusBadge.style.borderColor =
       checkState === "failed" || savedFailure
         ? "var(--danger,#c33)"
-        : checkState === "fresh" && scopesState === "verified"
+        : currentGrants
           ? "var(--success,#26804b)"
           : "var(--border,#8886)";
+    noticeMark.textContent =
+      checkState === "pending"
+        ? "↻"
+        : checkState === "failed" || savedFailure
+          ? "!"
+          : "i";
+    const required = model?.requiredScopes ?? [],
+      reported = known ? evidence.granted : [];
+    permissionHeading.textContent = known
+      ? currentGrants
+        ? "Token permissions"
+        : "Saved permission results"
+      : "Required permissions";
+    permissionCaption.textContent = !known
+      ? "Bitbucket has not reported individual scope grants."
+      : !currentGrants &&
+          ["pending", "failed"].includes(checkState) &&
+          evidence?.checkedAt
+        ? `From saved check: ${new Date(evidence.checkedAt).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" })}`
+        : "";
+    show(permissionCaption, !!permissionCaption.textContent);
+    renderPermissionRows(required, reported, known, currentGrants);
+    show(permissionPanel, available && saved);
     const stamp =
       checkState === "failed"
         ? checkAttemptedAt
@@ -289,22 +480,30 @@ export function mountAccount(root, ctx) {
         : checkState === "fresh"
           ? "Last checked"
           : "Saved check";
+    timeLabelNode.textContent = timeLabel;
     checkedAt.textContent =
       stamp && Number.isFinite(Date.parse(stamp))
-        ? `${timeLabel}: ${new Date(stamp).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" })}`
+        ? new Date(stamp).toLocaleString(undefined, {
+            dateStyle: "short",
+            timeStyle: "short",
+          })
         : "";
     readOnly.textContent =
       available && !writable
         ? "Read-only access. Sign in with write access to check permissions or change this connection."
         : "";
-    for (const el of [account, tokenInfo, permissions, checkedAt, readOnly])
-      show(el, !!el.textContent);
+    show(accountRow, !!account.textContent, "grid");
+    show(tokenRow, !!model?.person, "grid");
+    show(checkNotice, !!permissions.textContent, "grid");
+    show(timeBlock, !!checkedAt.textContent);
+    show(statusFooter, !!checkedAt.textContent || saved || !!error, "flex");
+    show(readOnly, !!readOnly.textContent);
     show(
       actions,
-      mode === "overview" && connected && host.connection.canRead,
+      mode === "overview" && connected && host.connection.canRead && writable,
       "flex",
     );
-    show(check, !!saved || !!error);
+    show(check, mode === "overview" && (!!saved || !!error));
     check.textContent = writable && saved ? "Check again" : "Refresh status";
     check.disabled = !!busyAction;
     show(connect, available && !saved);
