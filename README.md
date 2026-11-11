@@ -84,8 +84,21 @@ openclaw plugins reload bitbucket
 
 ## Personal logins
 
-1. Open **Bitbucket** in the Control UI sidebar and enter your Atlassian
-   account e-mail and a Bitbucket API token. Sign in to OpenClaw first. Old
+1. Open **Bitbucket** in the Control UI sidebar. The page shows whether a token
+   is saved and checks its permissions once on opening when you have write access.
+   Read-only connections show saved status and the last recorded check, without
+   dispatching that check operation. Choose **Connect Bitbucket** or **Replace
+   token…** to enter an Atlassian account e-mail and a scoped Bitbucket API token.
+   The status card uses labelled account/token fields and individual permission
+   rows: Granted, Missing or Unknown. It shows only scopes actually reported by
+   Bitbucket; additional reported grants are grouped as not required by this
+   plugin. More than four additional grants appear behind a counted Show all
+   control, while every required permission stays visible. Saved scope results
+   are labelled separately from current verification.
+   Each row exposes its exact scope identifier in its title and accessible name.
+   The creation instructions and scope checklist stay visible in that form.
+   Cancel returns to status and clears the entered token. **Disconnect…** asks
+   for confirmation before removing your saved login. Sign in to OpenClaw first. Old
    `/plugins/bitbucket/connect` links redirect to this native page. The form
    uses the authenticated Gateway connection; it does not submit through an
    external plugin frame. The page links to
@@ -105,14 +118,16 @@ openclaw plugins reload bitbucket
    The gateway checks identity using one read-only API request. When Bitbucket
    supplies a usable granted-scope list, missing required scopes are named and
    the replacement is refused without overwriting an existing login. Without
-   that metadata the page says **Token permissions unverified**, rather than
+   that metadata the page says **Scopes unknown**, rather than
    claiming write access was checked. Repository/branch permissions still apply.
 
-   **Check permissions** rechecks the signed-in person's saved token; no token
+   **Check again** rechecks the signed-in person's saved token; no token
    is sent back to the browser or accepted from that form. The timestamped
    result stays in the owner's private login file. Old login files remain
-   usable and show that permissions have not been checked. Page views do not
-   poll Bitbucket, and simultaneous checks for one person are refused.
+   usable. Read-only viewers without recorded scope data see Unknown rows;
+   writers run the opening check. There is no polling, and simultaneous checks
+   for one person are refused. A failed current check is shown as needing
+   attention, even when an older saved check had verified all scopes.
    If the existing login file is unreadable, replacement is refused to preserve
    it; repair the file or its permissions before reconnecting. If saving a
    completed check fails, the page shows the fresh result as unsaved, while the
@@ -257,10 +272,11 @@ node tools/check-account-ui.mjs PLAYWRIGHT_MODULE OUTPUT_DIRECTORY
 ```
 
 Pass the module entry path and an output directory as the two arguments. The
-checker uses synthetic accounts, writes six dark/light screenshots at
-320/390/960 pixels, and asserts RPC dispatch, cleared and hidden credential
-inputs, no horizontal overflow and stable action placement. It contacts no
-Bitbucket API or live gateway and is separate from the Node test suite.
+checker uses synthetic accounts, writes dark/light screenshots at
+320/390/960 pixels across eleven account states. It asserts one opening check,
+explicit replacement, token clearing, disconnect confirmation and cancellation,
+visible scoped-token help in the form, no horizontal overflow and stable
+feedback. It contacts no Bitbucket API or live gateway and is separate from the Node test suite.
 
 ## License
 
