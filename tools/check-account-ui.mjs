@@ -1,6 +1,6 @@
 // Optional browser evidence: node tools/check-account-ui.mjs PLAYWRIGHT_MODULE OUTPUT_DIRECTORY
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { pathToFileURL, fileURLToPath } from "node:url";
 if (!process.argv[2] || !process.argv[3])
   throw Error("Pass a Playwright module path and output directory");
 const { chromium } = await import(
@@ -33,6 +33,7 @@ try {
       await page.goto("http://account.example.invalid/");
       await page.evaluate(async (u) => {
         const mod = await import(u);
+        window.accountModule = mod;
         window.calls = [];
         const model = {
           status: 200,
@@ -48,6 +49,7 @@ try {
             "read:pipeline:bitbucket",
           ],
         };
+        window.baseModel = model;
         const host = {
           connection: { connected: true, canRead: true, canWrite: true },
           subscribe: () => () => {},
@@ -73,6 +75,9 @@ try {
           host,
         });
       }, moduleUrl);
+      await page
+        .getByRole("button", { name: "Connect Bitbucket", exact: true })
+        .click();
       const creationLink = page.getByRole("link", {
         name: "Create a scoped Bitbucket API token",
       });
@@ -139,7 +144,7 @@ try {
       )
         throw Error("Layout or dispatch regression");
       await page.screenshot({
-        path: new URL(`account-${theme}-${width}.png`, out).pathname,
+        path: fileURLToPath(new URL(`account-${theme}-${width}.png`, out)),
         fullPage: true,
       });
       results.push({
@@ -149,6 +154,151 @@ try {
         buttonMoved: Math.abs(before.y - after.y),
         calls,
       });
+      const states = [];
+      const capture = async (name) => {
+        if (
+          await page.evaluate(
+            () => document.documentElement.scrollWidth > innerWidth,
+          )
+        )
+          throw Error("Overflow in " + name);
+        await page.screenshot({
+          path: fileURLToPath(
+            new URL(`status-${name}-${theme}-${width}.png`, out),
+          ),
+          fullPage: true,
+        });
+        states.push(name);
+      };
+      await page.evaluate(() => {
+        window.view.dispose();
+        window.calls = [];
+        window.saved = {
+          ...window.baseModel,
+          login: {
+            name: "Ada Example",
+            user: "ada@example.invalid",
+            stored: "2026-01-01T00:00:00Z",
+            scopeCheck: {
+              status: "verified",
+              checkedAt: "2026-01-01T00:00:00Z",
+            },
+          },
+        };
+        window.host.request = async (method) => {
+          window.calls.push(method);
+          if (method.endsWith(".check"))
+            return new Promise(
+              (r) =>
+                (window.finishCheck = () =>
+                  r({
+                    ...window.saved,
+                    notice: { ok: true, text: "Permission check completed." },
+                  })),
+            );
+          if (method.endsWith(".disconnect"))
+            return {
+              ...window.baseModel,
+              notice: { ok: true, text: "Disconnected." },
+            };
+          return window.saved;
+        };
+        window.view = window.accountModule.mountAccount(
+          document.querySelector("#root"),
+          { host: window.host },
+        );
+      });
+      await page
+        .getByRole("status")
+        .filter({ hasText: "Checking permissions…" })
+        .waitFor();
+      if (await page.locator("form").isVisible())
+        throw Error("Opening exposed replacement form");
+      await capture("checking");
+      await page.evaluate(() => window.finishCheck());
+      await page
+        .getByRole("status")
+        .filter({ hasText: /^Connected$/ })
+        .waitFor();
+      await page.evaluate(() => {
+        window.notify();
+        window.notify();
+      });
+      if (
+        (await page.evaluate(() => window.calls)).join(",") !==
+        "bitbucket.connection.get,bitbucket.connection.check"
+      )
+        throw Error("Opening check looped");
+      await capture("connected");
+      await page
+        .getByRole("button", { name: "Replace token…", exact: true })
+        .click();
+      if (!(await creationLink.isVisible()))
+        throw Error("Replacement guidance hidden");
+      await capture("replace");
+      await page.getByLabel("Bitbucket API token").fill("synthetic-cancelled");
+      await page.getByRole("button", { name: "Cancel", exact: true }).click();
+      if (
+        (await page.locator("form").isVisible()) ||
+        (await page.getByLabel("Bitbucket API token").inputValue())
+      )
+        throw Error("Replacement cancel failed");
+      await page
+        .getByRole("button", { name: "Disconnect…", exact: true })
+        .click();
+      await capture("disconnect");
+      await page.getByRole("button", { name: "Cancel", exact: true }).click();
+      if (
+        (await page.evaluate(() => window.calls)).some((m) =>
+          m.endsWith(".disconnect"),
+        )
+      )
+        throw Error("Disconnect cancelled too late");
+      await page
+        .getByRole("button", { name: "Disconnect…", exact: true })
+        .click();
+      await page
+        .getByRole("button", { name: "Disconnect Bitbucket", exact: true })
+        .click();
+      await page
+        .getByRole("status")
+        .filter({ hasText: /^Not connected$/ })
+        .waitFor();
+      await capture("disconnected");
+      await page.evaluate(() => {
+        window.view.dispose();
+        window.calls = [];
+        window.host.request = async (method) => {
+          window.calls.push(method);
+          return method.endsWith(".check")
+            ? {
+                ...window.saved,
+                status: 502,
+                notice: {
+                  ok: false,
+                  text: "Bitbucket could not be reached. The saved token was kept.",
+                },
+              }
+            : window.saved;
+        };
+        window.view = window.accountModule.mountAccount(
+          document.querySelector("#root"),
+          { host: window.host },
+        );
+      });
+      await page
+        .getByRole("status")
+        .filter({ hasText: /^Connection needs attention$/ })
+        .waitFor();
+      if (
+        await page
+          .getByRole("status")
+          .filter({ hasText: /^Connected$/ })
+          .count()
+      )
+        throw Error("Stale verification shown as connected");
+      await capture("check-failed");
+      results.at(-1).states = states;
       await page.evaluate(() => {
         window.host.connection.connected = false;
         window.notify();
@@ -165,5 +315,5 @@ await fs.writeFile(
   JSON.stringify(results, null, 2),
 );
 console.log(
-  "Six native-form browser cases passed; credential input cleared and RPC dispatch verified",
+  "Six browser cases passed across seven account states; checks, explicit editing and disconnect confirmation verified",
 );

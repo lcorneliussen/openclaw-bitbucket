@@ -53,6 +53,11 @@ test("native form sends the token over authenticated RPC once, then clears it", 
   const root = new Node("root");
   const view = mountAccount(root, { host });
   await settle();
+  [...root.all()]
+    .find(
+      (n) => n.tagName === "button" && n.textContent === "Connect Bitbucket",
+    )
+    .onclick();
   const form = [...root.all()].find((n) => n.tagName === "form"),
     email = [...root.all()].find((n) => n.name === "user"),
     token = [...root.all()].find((n) => n.name === "token");
@@ -102,7 +107,11 @@ test("read-only UI never dispatches a credential change, even via a synthetic su
   );
   assert.ok(
     [...root.all()]
-      .filter((n) => n.tagName === "input" || n.tagName === "button")
+      .filter(
+        (n) =>
+          n.tagName === "input" ||
+          (n.tagName === "button" && n.textContent !== "Refresh status"),
+      )
       .every((n) => n.disabled),
   );
   view.dispose();
@@ -188,4 +197,158 @@ test("a transient startup probe retries without retrying credentials and cancels
   t.mock.timers.tick(2000);
   await settle();
   assert.equal(cancelledRequests, 1);
+});
+
+const find = (root, tag, text) =>
+  [...root.all()].find(
+    (n) => n.tagName === tag && (text === undefined || n.textContent === text),
+  );
+const hasText = (root, text) =>
+  [...root.all()].some((n) => n.textContent === text);
+const saved = {
+  ...state,
+  login: {
+    user: "ada@example.invalid",
+    name: "Ada Example",
+    stored: "2026-01-01T00:00:00Z",
+    scopeCheck: { status: "verified", checkedAt: "2026-01-01T00:00:00Z" },
+  },
+};
+
+test("opening a saved connection checks once and keeps editing explicit", async () => {
+  const { host, calls, notify } = setup();
+  let finish;
+  host.request = async (method, params) => {
+    calls.push({ method, params });
+    if (method.endsWith(".check")) return new Promise((r) => (finish = r));
+    return saved;
+  };
+  const root = new Node("root"),
+    view = mountAccount(root, { host });
+  await settle();
+  assert.deepEqual(
+    calls.map((c) => c.method),
+    ["bitbucket.connection.get", "bitbucket.connection.check"],
+  );
+  assert.ok(hasText(root, "Checking permissions…"));
+  assert.equal(find(root, "form").hidden, true);
+  notify();
+  notify();
+  await settle();
+  assert.equal(calls.length, 2);
+  finish({
+    ...saved,
+    notice: { ok: true, text: "Permission check completed." },
+  });
+  await settle();
+  assert.ok(hasText(root, "Connected"));
+  assert.ok(hasText(root, "Token saved on this gateway."));
+  find(root, "button", "Replace token…").onclick();
+  assert.equal(find(root, "form").hidden, false);
+  assert.ok(hasText(root, "Replace token"));
+  find(root, "input").value = "changed@example.invalid";
+  [...root.all()].find((n) => n.name === "token").value = "synthetic-not-kept";
+  const form = find(root, "form");
+  find(form, "button", "Cancel").onclick();
+  assert.equal(form.hidden, true);
+  assert.equal([...root.all()].find((n) => n.name === "token").value, "");
+  assert.equal(calls.length, 2);
+  view.dispose();
+});
+
+test("read-only opening shows token presence without calling the check mutation", async () => {
+  const { host, calls } = setup(false);
+  host.request = async (method, params) => {
+    calls.push({ method, params });
+    return saved;
+  };
+  const root = new Node("root"),
+    view = mountAccount(root, { host });
+  await settle();
+  assert.deepEqual(
+    calls.map((c) => c.method),
+    ["bitbucket.connection.get"],
+  );
+  assert.ok(hasText(root, "Token saved"));
+  assert.equal(hasText(root, "Connected"), false);
+  assert.equal(find(root, "form").hidden, true);
+  view.dispose();
+});
+
+test("a failed opening check does not show stale verification as connected", async () => {
+  const { host } = setup();
+  host.request = async (method) =>
+    method.endsWith(".check")
+      ? {
+          ...saved,
+          status: 502,
+          notice: { ok: false, text: "Bitbucket is unavailable." },
+        }
+      : saved;
+  const root = new Node("root"),
+    view = mountAccount(root, { host });
+  await settle();
+  assert.ok(hasText(root, "Connection needs attention"));
+  assert.ok(hasText(root, "Bitbucket is unavailable."));
+  assert.equal(hasText(root, "Connected"), false);
+  assert.ok(hasText(root, "Token saved on this gateway."));
+  view.dispose();
+});
+
+test("disconnect requires entering its mode and explicit confirmation", async () => {
+  const { host, calls } = setup();
+  host.request = async (method, params) => {
+    calls.push({ method, params });
+    return method.endsWith(".disconnect")
+      ? { ...state, notice: { ok: true, text: "Disconnected." } }
+      : saved;
+  };
+  const root = new Node("root"),
+    view = mountAccount(root, { host });
+  await settle();
+  find(root, "button", "Disconnect Bitbucket").onclick();
+  await settle();
+  assert.equal(
+    calls.some((c) => c.method.endsWith(".disconnect")),
+    false,
+  );
+  find(root, "button", "Disconnect…").onclick();
+  const panel = [...root.all()].find((n) =>
+    n.children?.some((c) => c?.textContent === "Disconnect Bitbucket?"),
+  );
+  assert.equal(panel.hidden, false);
+  find(panel, "button", "Cancel").onclick();
+  assert.equal(panel.hidden, true);
+  assert.equal(
+    calls.some((c) => c.method.endsWith(".disconnect")),
+    false,
+  );
+  find(root, "button", "Disconnect…").onclick();
+  find(root, "button", "Disconnect Bitbucket").onclick();
+  await settle();
+  assert.equal(calls.filter((c) => c.method.endsWith(".disconnect")).length, 1);
+  assert.ok(hasText(root, "Not connected"));
+  assert.equal(find(root, "form").hidden, true);
+  view.dispose();
+});
+
+test("a failed disconnect stays in confirmation and displays its error", async () => {
+  const { host } = setup();
+  host.request = async (method) =>
+    method.endsWith(".disconnect")
+      ? {
+          ...saved,
+          status: 502,
+          notice: { ok: false, text: "The saved login could not be removed." },
+        }
+      : saved;
+  const root = new Node("root"),
+    view = mountAccount(root, { host });
+  await settle();
+  find(root, "button", "Disconnect…").onclick();
+  find(root, "button", "Disconnect Bitbucket").onclick();
+  await settle();
+  assert.ok(hasText(root, "The saved login could not be removed."));
+  assert.equal(find(root, "button", "Disconnect Bitbucket").disabled, false);
+  view.dispose();
 });
