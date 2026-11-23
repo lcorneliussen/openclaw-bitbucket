@@ -6,7 +6,7 @@ import path from "node:path";
 import { after, before, test } from "node:test";
 
 import { writeLogin } from "../lib/logins.js";
-import { createPullRequestWriter, parseRequest, RECEIPTS_DIR, receiptName, REQUEST_FILE } from "../lib/pr-writes.js";
+import { claimName, createPullRequestWriter, parseRequest, RECEIPTS_DIR, receiptName, REQUEST_FILE } from "../lib/pr-writes.js";
 
 // Network containment: these tests answer every Bitbucket call themselves.
 // The global fetch is poisoned so that a call that escapes the injected
@@ -18,7 +18,7 @@ after(() => { globalThis.fetch = realFetch; });
 const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 const HEAD = "0123456789abcdef0123";
 
-async function fixture({ pr = {}, comments = {}, me = "{ada}", failOn, hangOn } = {}) {
+async function fixture({ pr = {}, comments = {}, me = "{ada}", failOn, hangOn, unreadableOn } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), "bitbucket-pr-writes-"));
   const work = path.join(root, "work");
   execFileSync("git", ["init", "-q", "-b", "main", work]);
@@ -33,6 +33,7 @@ async function fixture({ pr = {}, comments = {}, me = "{ada}", failOn, hangOn } 
     calls.push({ route, method: init.method, auth: init.headers.authorization, body: init.body && JSON.parse(init.body), redirect: init.redirect });
     if (!url.startsWith("https://api.test/2.0/")) throw new Error("unexpected host");
     if (hangOn && init.method === hangOn.method && route.endsWith(hangOn.suffix)) throw new TypeError("fetch failed");
+    if (unreadableOn && init.method === unreadableOn.method && route.endsWith(unreadableOn.suffix)) return { ok: true, status: 201, text: async () => { throw new TypeError("terminated"); } };
     if (failOn && init.method === failOn.method && route.endsWith(failOn.suffix)) return new Response("{}", { status: failOn.status ?? 403 });
     if (route === "/user") return Response.json({ uuid: me });
     const m = route.match(/^\/repositories\/example-ws\/docs\/pullrequests\/(\d+)(\/comments(?:\/(\d+))?(\/resolve)?)?$/);
@@ -189,4 +190,32 @@ test("requests outside the closed shape are refused", () => {
   }
   assert.throws(() => parseRequest(JSON.stringify({ ...base, intentId: "../x", operations: [{ op: "pr.ready" }] })), /intentId/);
   assert.throws(() => parseRequest(JSON.stringify({ ...base, url: "https://elsewhere", operations: [{ op: "pr.ready" }] })), /unsupported field/);
+});
+
+test("two confirms of one intent close together write once (review round 1)", async () => {
+  const f = await fixture();
+  await f.ask(request([{ op: "comment.create", text: "Summary" }]));
+  const first = await f.writer.ask(action());
+  const second = await f.writer.ask(action());
+  const results = await Promise.all([first, second].map((a) => f.writer.confirm(action({ requestId: a.result.requestId, requestDigest: a.result.confirmation.requestDigest }))));
+  assert.equal(results.filter((r) => r.ok).length, 1, JSON.stringify(results));
+  assert.equal(f.calls.filter((c) => c.method === "POST").length, 1);
+});
+
+test("a write whose answer cannot be read is unknown, and an interrupted intent is not run again (review round 1)", async () => {
+  const f = await fixture({ unreadableOn: { method: "POST", suffix: "/comments" } });
+  await f.ask(request([{ op: "comment.create", text: "Summary" }, { op: "pr.ready" }]));
+  const asked = await f.writer.ask(action());
+  const done = await f.writer.confirm(action({ requestId: asked.result.requestId, requestDigest: asked.result.confirmation.requestDigest }));
+  assert.deepEqual(done.result.receipt.results.map((r) => r.status), ["unknown", "skipped"]);
+  // A claim without a receipt (a run that died before writing it) refuses a repeat.
+  const g = await fixture();
+  await g.ask(request([{ op: "comment.create", text: "Summary" }]));
+  const { mkdir, writeFile } = await import("node:fs/promises");
+  await mkdir(path.join(g.gitDir, RECEIPTS_DIR), { recursive: true });
+  await writeFile(path.join(g.gitDir, RECEIPTS_DIR, claimName("review-0001-abcdef")), "2026-11-23T00:00:00Z\n");
+  const again = await g.writer.ask(action());
+  assert.equal(again.ok, false);
+  assert.match(again.error, /carried out already/);
+  assert.ok(!g.calls.some((c) => c.method !== "GET"));
 });

@@ -281,8 +281,10 @@ write Bitbucket received no answer for is recorded as `unknown`, for the tool
 to reconcile by reading the pull request. The receipt is written to
 `bitbucket-pr-writes/<intentId>.receipt.json` in the same git directory, with
 each operation's `status` (`done`, `failed`, `unknown` or `skipped`) and the
-id of each comment created. An intent id with a receipt is never carried out
-again. The login and token never appear in the request, the receipt or an
+id of each comment created. An intent id is started once: a claim
+(`<intentId>.claim`) is recorded before its first write, so neither a second
+confirm nor a run that was interrupted before its receipt can write again; an
+interrupted run is reconciled by reading the pull request. The login and token never appear in the request, the receipt or an
 answer.
 
 ## Configuration
