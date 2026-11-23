@@ -10,6 +10,7 @@ import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-
 import { loginFile, readLogin } from "./lib/logins.js";
 import { renderPage } from "./lib/page.js";
 import { createPublisher } from "./lib/publish.js";
+import { createPullRequestWriter } from "./lib/pr-writes.js";
 import { createConnectionService } from "./lib/connection.js";
 import { REQUIRED_SCOPES, TOKEN_SETTINGS_URL } from "./lib/scopes.js";
 
@@ -229,6 +230,25 @@ export default definePluginEntry({
       requiredScopes: ["operator.write"],
       schema: { ...payload({ requestId: { type: "string" }, requestDigest: { type: "string" } }), required: ["requestId", "requestDigest"] },
       handler: publisher.confirm,
+    });
+
+    // Pull request writes a session asked for (review comments, resolve,
+    // ready, title and description), carried out as the person who confirms
+    // them. The agent asks with a request file; it never holds the login.
+    const writer = createPullRequestWriter({ stateDir, getSessionEntry, currentProfile });
+    api.session.controls.registerSessionAction({
+      id: "pr-writes",
+      description: "Show the pull request writes this session asked for (review comments, resolve, ready, title or description) and with whose login: yours. Nothing happens until you confirm.",
+      requiredScopes: ["operator.write"],
+      schema: payload({}),
+      handler: writer.ask,
+    });
+    api.session.controls.registerSessionAction({
+      id: "pr-writes-confirm",
+      description: "Confirm the pull request writes you were shown: they are made with your own Bitbucket login, once.",
+      requiredScopes: ["operator.write"],
+      schema: { ...payload({ requestId: { type: "string" }, requestDigest: { type: "string" } }), required: ["requestId", "requestDigest"] },
+      handler: writer.confirm,
     });
 
     // The old browser URL is now a public redirect, not a credential endpoint.
