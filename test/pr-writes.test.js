@@ -18,7 +18,7 @@ after(() => { globalThis.fetch = realFetch; });
 const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 const HEAD = "0123456789abcdef0123";
 
-async function fixture({ pr = {}, comments = {}, me = "{ada}", failOn, hangOn, unreadableOn } = {}) {
+async function fixture({ pr = {}, comments = {}, me = "{ada}", failOn, hangOn, unreadableOn, nonJsonOn } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), "bitbucket-pr-writes-"));
   const work = path.join(root, "work");
   execFileSync("git", ["init", "-q", "-b", "main", work]);
@@ -33,6 +33,7 @@ async function fixture({ pr = {}, comments = {}, me = "{ada}", failOn, hangOn, u
     calls.push({ route, method: init.method, auth: init.headers.authorization, body: init.body && JSON.parse(init.body), redirect: init.redirect });
     if (!url.startsWith("https://api.test/2.0/")) throw new Error("unexpected host");
     if (hangOn && init.method === hangOn.method && route.endsWith(hangOn.suffix)) throw new TypeError("fetch failed");
+    if (nonJsonOn && init.method === nonJsonOn.method && route.endsWith(nonJsonOn.suffix)) return new Response("accepted", { status: 201 });
     if (unreadableOn && init.method === unreadableOn.method && route.endsWith(unreadableOn.suffix)) return { ok: true, status: 201, text: async () => { throw new TypeError("terminated"); } };
     if (failOn && init.method === failOn.method && route.endsWith(failOn.suffix)) return new Response("{}", { status: failOn.status ?? 403 });
     if (route === "/user") return Response.json({ uuid: me });
@@ -158,6 +159,8 @@ test("the repository, pull request and head are pinned", async () => {
 test("a failure stops the run; an unanswered write is unknown, never retried", async () => {
   for (const [options, status] of [
     [{ failOn: { method: "PUT", suffix: "/comments/41", status: 403 } }, "failed"],
+    [{ failOn: { method: "PUT", suffix: "/comments/41", status: 502 } }, "unknown"],
+    [{ nonJsonOn: { method: "PUT", suffix: "/comments/41" } }, "unknown"],
     [{ hangOn: { method: "PUT", suffix: "/comments/41" } }, "unknown"],
   ]) {
     const f = await fixture(options);
@@ -192,7 +195,7 @@ test("requests outside the closed shape are refused", () => {
   assert.throws(() => parseRequest(JSON.stringify({ ...base, url: "https://elsewhere", operations: [{ op: "pr.ready" }] })), /unsupported field/);
 });
 
-test("two confirms of one intent close together write once (review round 1)", async () => {
+test("two confirms of one intent close together write once", async () => {
   const f = await fixture();
   await f.ask(request([{ op: "comment.create", text: "Summary" }]));
   const first = await f.writer.ask(action());
@@ -202,7 +205,7 @@ test("two confirms of one intent close together write once (review round 1)", as
   assert.equal(f.calls.filter((c) => c.method === "POST").length, 1);
 });
 
-test("a write whose answer cannot be read is unknown, and an interrupted intent is not run again (review round 1)", async () => {
+test("a write whose answer cannot be read is unknown, and an interrupted intent is not run again", async () => {
   const f = await fixture({ unreadableOn: { method: "POST", suffix: "/comments" } });
   await f.ask(request([{ op: "comment.create", text: "Summary" }, { op: "pr.ready" }]));
   const asked = await f.writer.ask(action());
