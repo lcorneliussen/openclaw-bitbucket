@@ -170,6 +170,12 @@ For an inline comment, get the line number from `twg bb prs diff-line 42`
 instead of counting lines in the diff. Answer a review thread with
 `--reply-to`, then fix or explain; resolve it only when the point is settled.
 
+When `BITBUCKET_PUBLISH` is `gateway`, these commands have no login. A tool
+that writes to a pull request (such as `taba review post`) then leaves its
+writes as a request for the person to confirm in the Control UI; tell them
+what is waiting, and run the tool again after they confirmed so it reads the
+receipt. Never write that request by hand.
+
 ## Pipelines
 
 ```bash

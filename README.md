@@ -242,6 +242,49 @@ skill tells the agent to leave publishing to the person. Login files remain
 readable by the gateway's OS user, so this is a rule for agents that follow
 the skill, not isolation; sandboxes are (see above).
 
+## Pull request writes from the gateway
+
+With `execLogin` off, an agent cannot comment on, resolve, edit or un-draft a
+pull request itself. A tool that needs to (a review poster, say) hands its
+writes over as a request, and the person carries them out with their own
+login after seeing them, through two more session actions:
+
+| Action | Payload | Answer |
+|---|---|---|
+| `pr-writes` | `{}` | `needs_confirmation` with a `requestId` and a `confirmation` naming the account, repository, pull request, head and every operation, and a `requestDigest`; `not_connected` without a login |
+| `pr-writes-confirm` | `{requestId, requestDigest}` | `done` or `stopped`, with the receipt |
+
+The request is `bitbucket-pr-writes.json` in the worktree's git directory
+(`git rev-parse --git-dir`):
+
+```json
+{ "version": 1, "intentId": "review-1a2b3c4d", "pr": 7, "head": "<commit>",
+  "operations": [
+    { "op": "comment.create", "text": "Summary", "inline": { "path": "a.go", "to": 12 } },
+    { "op": "comment.update", "comment": 123, "text": "Updated summary" },
+    { "op": "comment.resolve", "comment": 124 },
+    { "op": "pr.update", "title": "New title", "description": "New body" },
+    { "op": "pr.ready" } ] }
+```
+
+Those five operations are the whole set (`comment.create` also takes
+`parent`, and `inline` takes `from` for a removed line); any other operation
+or field refuses the request. The repository is the worktree's origin (an
+`owner`/`repo` in the request must match it); the pull request must be open
+in it and still have `head`; `pr.ready` needs a draft; a comment to update or
+resolve must be on that pull request, and one to update must be the
+confirming account's own. Only the person who asked can confirm, within ten
+minutes, and only if the request file still says exactly what they saw.
+
+The writes run in order with no retry. The first refusal stops the run; a
+write Bitbucket received no answer for is recorded as `unknown`, for the tool
+to reconcile by reading the pull request. The receipt is written to
+`bitbucket-pr-writes/<intentId>.receipt.json` in the same git directory, with
+each operation's `status` (`done`, `failed`, `unknown` or `skipped`) and the
+id of each comment created. An intent id with a receipt is never carried out
+again. The login and token never appear in the request, the receipt or an
+answer.
+
 ## Configuration
 
 `plugins.entries.bitbucket.config`:
